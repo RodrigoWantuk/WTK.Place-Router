@@ -14,6 +14,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - O usuário deve conseguir expressar intenção elétrica e física visualmente, sem editar arquivos de regras manualmente.
 - O primeiro objetivo é demonstrar um ciclo autônomo completo e verificável em placas pequenas/médias, não substituir um layout engineer em qualquer classe de PCB desde a primeira versão.
 - A interface é desktop-first, com arquitetura Avalonia + MVVM e workspace no estilo IDE/CAD, mantendo o physical-design engine headless e independente da UI.
+- Interações com IA são operações tipadas e versionadas: preamble conciso + contexto JSON mínimo + response contract estrito; a IA permanece fora do inner loop numérico e toda proposta é validada pelo engine antes de alterar o estado.
 
 ## Documentação inicial
 
@@ -25,6 +26,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 6. [Agente de IA, revisão, memória e explainability](docs/05-Agente-IA-Revisao-e-Memoria.md)
 7. [Roadmap técnico, experimento inicial e critérios de sucesso](docs/06-Roadmap-e-Criterios-de-Sucesso.md)
 8. [Arquitetura da interface desktop, docking e workspaces](docs/07-Arquitetura-da-Interface.md)
+9. [Protocolo de iterações com IA e fronteira determinística](docs/08-Protocolo-de-Iteracoes-com-IA.md)
 
 ## Estado
 
