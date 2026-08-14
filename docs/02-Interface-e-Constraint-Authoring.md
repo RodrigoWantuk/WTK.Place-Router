@@ -6,7 +6,13 @@ A interface do Place&Router não deve ser apenas um visualizador da placa. Antes
 
 A etapa central de preparação do projeto é o **Constraint Workspace**.
 
-O usuário importa o circuito, inspeciona componentes e nets, cria grupos, informa propriedades elétricas e físicas, define relações de proximidade/afastamento, configura placa e fabricação e somente depois dispara o optimizer.
+O usuário importa o circuito, inspeciona componentes e nets, cria grupos, informa propriedades elétricas e físicas quando necessário, define relações de proximidade/afastamento, configura placa e fabricação e somente depois dispara o optimizer.
+
+A UX segue um princípio adicional obrigatório:
+
+> **Importar → derivar deterministicamente → aplicar defaults de perfil → inferir/sugerir → perguntar somente se a informação restante for material para a decisão atual.**
+
+O fato de o schema permitir muitos campos não significa que o usuário precise preencher todos.
 
 Fluxo principal:
 
@@ -15,15 +21,17 @@ Importar design/netlist
       ↓
 Resolver footprints/pins
       ↓
+Automatic deterministic enrichment
+      ↓
 Exibir Components + Nets
       ↓
 Classificar / agrupar / enriquecer
       ↓
-Definir constraints e objetivos
+Definir constraints e objetivos adicionais
       ↓
 Definir board / stackup / fabricação
       ↓
-Validar conflitos e informações ausentes
+Validar conflitos e informações ausentes materialmente necessárias
       ↓
 Ready for Physical Design
       ↓
@@ -83,6 +91,16 @@ Filtros úteis:
 - high-frequency;
 - analog/digital/power;
 - constraint violations.
+
+`Missing data` deve distinguir:
+
+```text
+Missing but currently irrelevant
+Missing and reduces confidence
+Missing and currently blocks a calculation
+```
+
+Só a última categoria deve normalmente interromper o workflow.
 
 ## 4. Seleção unificada
 
@@ -169,7 +187,8 @@ A UI deve deixar claro o que foi:
 
 - importado;
 - informado pelo usuário;
-- inferido;
+- inferido deterministicamente;
+- inferido/sugerido pela IA;
 - derivado;
 - deixado unknown.
 
@@ -201,6 +220,8 @@ Campos candidatos:
 - preferred/forbidden layers.
 
 Nem todo campo se aplica a toda net.
+
+Nem todo campo aplicável é obrigatório antes de uma run.
 
 ## 7. Propriedades de componentes
 
@@ -325,6 +346,8 @@ from
 BUCK_5V
 ```
 
+O sistema pode sugerir grupos com base em connectivity graph e semantic enrichment; o usuário não precisa montar toda hierarquia manualmente.
+
 ## 10. Bulk editing
 
 A interface deve suportar edição em lote.
@@ -354,6 +377,8 @@ Set default current class = 2 A
 ```
 
 Sem bulk editing, a preparação de placas maiores se torna inviável.
+
+Bulk editing é fallback para quando import/inference não bastarem; não deve ser o fluxo obrigatório normal.
 
 ## 11. Herança de regras
 
@@ -439,7 +464,7 @@ A orientação de componentes e pads também precisa ser expressável.
 
 ## 14. Board Definition
 
-Antes da otimização, o usuário deve configurar ou importar:
+Antes da otimização, o sistema tenta importar e o usuário completa apenas o que faltar:
 
 - board outline;
 - dimensões;
@@ -518,6 +543,8 @@ Constraints de fabricação são Required/hard constraints.
 
 A aplicação nunca deve melhorar score violando a capacidade do fabricante selecionado.
 
+Selecionar o profile deve preencher automaticamente as regras relacionadas; o usuário não deve redigitá-las em cada projeto.
+
 ## 17. Regiões visuais
 
 O usuário deve poder desenhar regiões diretamente sobre a board.
@@ -549,6 +576,8 @@ Tipos de relação:
 - Preferred;
 - Forbidden.
 
+Regiões podem ser explicitamente desenhadas ou sugeridas por floorplanning/semantic grouping e depois editadas.
+
 ## 18. Suggest Constraints
 
 O usuário deve poder selecionar um componente, net ou grupo e pedir sugestões.
@@ -560,14 +589,15 @@ Select U7
 → Suggest constraints
 ```
 
-O agente pode consultar:
+Antes da chamada cloud, o sistema já fornece ao agente:
 
 - part number;
 - pin names;
 - net topology;
-- datasheet/application note, quando disponível;
-- semantic graph;
-- existing project rules.
+- deterministic tags/inferences;
+- semantic graph atual;
+- existing project rules;
+- datasheet/application note quando disponível.
 
 Sugestão possível:
 
@@ -623,13 +653,13 @@ Board
 Components
 ✓ 47 components
 ✓ 47 footprints resolved
-⚠ 3 components without semantic classification
+⚠ 3 components without semantic classification — non-blocking
 
 Nets
 ✓ 62 nets
 ✓ 8 power nets classified
-⚠ 14 nets without estimated frequency
-⚠ 21 nets without susceptibility information
+⚠ 14 nets without estimated frequency — currently non-blocking
+⚠ 1 high-current net without width/current basis — action required
 
 Rules
 ✓ 38 Required constraints
@@ -638,14 +668,69 @@ Rules
 ✓ No known conflicts
 
 Result:
-READY WITH WARNINGS
+READY AFTER 1 REQUIRED INPUT
 ```
 
 Unknown data não deve automaticamente bloquear execução.
 
-## 21. Durante a otimização
+## 21. Perguntas automáticas de dados faltantes
 
-Embora o foco desta documentação seja a preparação, a mesma GUI deverá posteriormente mostrar:
+Quando uma informação for necessária, a pergunta deve incluir:
+
+1. **o que precisamos saber**;
+2. **por que precisamos saber**;
+3. **qual cálculo depende disso**;
+4. **quais fallbacks são seguros, se existirem**.
+
+Exemplo:
+
+```text
+VIN_MOTOR — corrente máxima
+
+Por quê?
+Precisamos dimensionar a largura mínima da rota.
+
+Não afeta:
+placement inicial e conectividade.
+
+[Corrente máxima: ____ A]
+[Usar net class importada]
+[Usar apenas mínimo do fabricante]
+[Manter Unknown]
+```
+
+A aplicação não deve transformar readiness em um questionário técnico obrigatório.
+
+## 22. Perfis de otimização amigáveis
+
+Parâmetros algorítmicos não devem ser a interface normal do produto.
+
+O usuário comum pode escolher perfis como:
+
+```text
+Balanced
+Routing-first
+Compact
+Low-via
+EMI-conscious
+Manufacturing-conservative
+```
+
+Esses perfis mapeiam internamente para parâmetros versionados do engine.
+
+Configurações como:
+
+- routing grid pitch;
+- A* cost weights;
+- negotiated-congestion factors;
+- SA temperature/cooling;
+- LNS neighborhood size;
+
+ficam em Advanced/Diagnostics/Benchmark mode, não no fluxo principal.
+
+## 23. Durante a otimização
+
+A mesma GUI deverá posteriormente mostrar:
 
 - candidate state atual;
 - elementos locked;
@@ -661,7 +746,9 @@ Embora o foco desta documentação seja a preparação, a mesma GUI deverá post
 
 A interface de authoring e a interface de review precisam compartilhar as mesmas entidades, evitando dois modelos mentais diferentes.
 
-## 22. Objetivo de UX
+A explicação ao usuário deve preferir linguagem de engenharia a parâmetros internos do algoritmo.
+
+## 24. Objetivo de UX
 
 O sucesso da aplicação depende tanto da GUI quanto do optimizer.
 
@@ -669,4 +756,6 @@ O usuário deve conseguir expressar em poucos cliques intenções complexas como
 
 > “Esse bloco analógico é muito suscetível; mantenha-o afastado desse grupo de switching nets, preserve esta região silenciosa, limite as vias dessa interface e respeite as capacidades desta fábrica.”
 
-A GUI transforma essa intenção em regras estruturadas. A IA e o optimizer recebem um problema bem definido em vez de tentar adivinhar silenciosamente todo conhecimento que o projetista já possui.
+Mas o objetivo ainda melhor é que, quando import/topologia/perfis já permitirem concluir parte disso, o sistema **não obrigue o usuário a repetir informação que pode ser obtida automaticamente**.
+
+A GUI transforma intenção humana e dados importados em regras estruturadas. A IA e o optimizer recebem um problema bem definido em vez de tentar adivinhar silenciosamente todo conhecimento que o projetista já possui — ou exigir que o projetista preencha manualmente tudo que o software poderia derivar.
