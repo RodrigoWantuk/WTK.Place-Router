@@ -313,10 +313,14 @@ Detalhes no ADR-0004.
 ### Accepted
 
 - canonical model desacoplado do EDA;
-- EasyEDA como primeiro adapter prático provável;
 - arquitetura preparada para KiCad/Specctra/IPC-2581/outros;
 - round-trip export é objetivo arquitetural;
-- import/export deve produzir capabilities/loss diagnostics.
+- import/export produz capabilities/loss diagnostics;
+- primeiro handoff físico concreto com EasyEDA Pro usa **Specctra DSN** como input baseline;
+- EasyEDA netlist pode ser source supplemental para metadata/cross-check;
+- SES é inicialmente tratado como retorno de wires/vias, não como garantia de round-trip completo de placement.
+
+Detalhes no ADR-0006.
 
 ---
 
@@ -324,7 +328,7 @@ Detalhes no ADR-0004.
 
 ### Accepted
 
-PRDX deixa de ser apenas nome provisório conceitual e passa a ser o **formato nativo de projeto da primeira implementação**.
+PRDX é o **formato nativo de projeto da primeira implementação**.
 
 ```text
 extension              .prdx
@@ -471,7 +475,7 @@ PDF
 
 ```text
 IPC-2581 / IPC-DPMX
-Specctra DSN/SES round-trip
+Specctra SES round-trip
 EasyEDA/KiCad native round-trip
 CNC/isolation outputs via MachineProfile
 ```
@@ -518,7 +522,6 @@ Ainda abertas ou benchmark-gated:
 
 - versão final de .NET/Avalonia no bootstrap;
 - package names finais;
-- primeiro handoff EasyEDA concreto;
 - score normalization final;
 - thermal/SI/PI solver depth;
 - provider/model routing pós-benchmarks;
@@ -526,9 +529,10 @@ Ainda abertas ou benchmark-gated:
 - engine in-process versus out-of-process futuramente;
 - search avançado/MCTS/ML;
 - conformance/profile exatos de cada exporter além do baseline v0.1;
-- políticas finais de reimport/rebase complexos.
+- políticas finais de reimport/rebase complexos;
+- mecanismo futuro de full placement round-trip para EasyEDA.
 
-O **formato PRDX v0.1 base não é mais uma decisão aberta**; evoluções são versionadas/migradas.
+O formato PRDX v0.1 base e o primeiro EasyEDA DSN handoff não são mais decisões abertas.
 
 ---
 
@@ -538,6 +542,7 @@ O **formato PRDX v0.1 base não é mais uma decisão aberta**; evoluções são 
 - `ADR-0002` — Stack desktop e fronteiras arquiteturais;
 - `ADR-0003` — Processamento local e estratégia algorítmica;
 - `ADR-0004` — Gate de licenciamento para dependências algorítmicas;
-- `ADR-0005` — PRDX, persistência, lifecycle de edição e exportação.
+- `ADR-0005` — PRDX, persistência, lifecycle de edição e exportação;
+- `ADR-0006` — EasyEDA Pro: handoff inicial via Specctra DSN.
 
 Novas decisões que alterem invariants devem ganhar ADR próprio.
