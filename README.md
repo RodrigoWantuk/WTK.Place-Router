@@ -22,6 +22,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - O formato nativo de projeto é `.prdx`: container ZIP versionado com `manifest.json` + `project.json`, contendo logical design, constraints, semantics, manufacturing assumptions e o `PhysicalDesignState` aceito, incluindo placement e routing.
 - Project, workspace, optimization run e cache são persistências distintas. Alterações manuais usam dependency-driven invalidation para reexecutar apenas o menor estágio/scope necessário.
 - Export parte sempre do estado canônico e contempla fabricação industrial, round-trip EDA, imagens/documentação e arte 1:1 para processos artesanais/transferência.
+- O primeiro handoff físico concreto com EasyEDA Pro usa **Specctra DSN** como entrada baseline; SES é tratado inicialmente como retorno de wires/vias, sem presumir round-trip completo de placement.
 
 ## Documentação inicial
 
@@ -42,6 +43,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 
 - [PRDX 0.1 — manifest](schemas/prdx/0.1/prdx-manifest.schema.json)
 - [PRDX 0.1 — canonical project](schemas/prdx/0.1/prdx-project.schema.json)
+- [PRDX 0.1 — fixtures e validação](schemas/prdx/0.1/README.md)
 
 ## ADRs
 
@@ -50,6 +52,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - [ADR-0003 — Processamento local e estratégia algorítmica](docs/adr/0003-Processamento-Local-e-Estrategia-Algoritmica.md)
 - [ADR-0004 — Gate de licenciamento para dependências algorítmicas](docs/adr/0004-Licenciamento-de-Dependencias-Algoritmicas.md)
 - [ADR-0005 — PRDX, persistência, lifecycle de edição e exportação](docs/adr/0005-PRDX-Persistencia-Lifecycle-e-Exportacao.md)
+- [ADR-0006 — EasyEDA Pro: handoff inicial via Specctra DSN](docs/adr/0006-EasyEDA-Pro-Handoff-Inicial-via-DSN.md)
 
 ## Estado
 
