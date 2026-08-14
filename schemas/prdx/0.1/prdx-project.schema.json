@@ -1,0 +1,976 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wtk.dev/schemas/prdx/0.1/prdx-project.schema.json",
+  "title": "WTK.Place&Router PRDX Project 0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "projectRevision",
+    "metadata",
+    "sourceImports",
+    "logicalDesign",
+    "board",
+    "manufacturingProfile",
+    "constraints",
+    "semantics",
+    "physicalDesignState",
+    "projectSettings"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^0\\.1\\.[0-9]+$"
+    },
+    "projectId": {
+      "$ref": "#/$defs/id"
+    },
+    "projectRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "metadata": {
+      "$ref": "#/$defs/projectMetadata"
+    },
+    "sourceImports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sourceImport"
+      }
+    },
+    "logicalDesign": {
+      "$ref": "#/$defs/logicalDesign"
+    },
+    "board": {
+      "$ref": "#/$defs/board"
+    },
+    "manufacturingProfile": {
+      "$ref": "#/$defs/manufacturingProfile"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/constraint"
+      }
+    },
+    "semantics": {
+      "$ref": "#/$defs/semantics"
+    },
+    "physicalDesignState": {
+      "$ref": "#/$defs/physicalDesignState"
+    },
+    "reviewDecisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/reviewDecision"
+      },
+      "default": []
+    },
+    "projectSettings": {
+      "$ref": "#/$defs/projectSettings"
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "integer"},
+        "y": {"type": "integer"}
+      }
+    },
+    "polygon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outer"],
+      "properties": {
+        "outer": {
+          "type": "array",
+          "minItems": 3,
+          "items": {"$ref": "#/$defs/point"}
+        },
+        "holes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "items": {"$ref": "#/$defs/point"}
+          },
+          "default": []
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "IMPORTED",
+            "USER_DEFINED",
+            "AI_INFERRED",
+            "DETERMINISTIC_INFERENCE",
+            "DETERMINISTIC_MEASUREMENT",
+            "DERIVED",
+            "MANUFACTURING_PROFILE",
+            "DEFAULT",
+            "UNKNOWN"
+          ]
+        },
+        "sourceRef": {"type": ["string", "null"]},
+        "model": {"type": ["string", "null"]},
+        "operation": {"type": ["string", "null"]},
+        "timestamp": {"type": ["string", "null"], "format": "date-time"},
+        "note": {"type": ["string", "null"]}
+      }
+    },
+    "sourcedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "provenance"],
+      "properties": {
+        "value": {
+          "type": ["number", "integer", "string", "boolean", "array", "object", "null"]
+        },
+        "unit": {"type": ["string", "null"]},
+        "status": {
+          "enum": ["KNOWN", "INFERRED", "UNKNOWN", "NOT_APPLICABLE"]
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "projectMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "createdAt", "modifiedAt"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "description": {"type": ["string", "null"]},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "modifiedAt": {"type": "string", "format": "date-time"},
+        "author": {"type": ["string", "null"]},
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": []
+        }
+      }
+    },
+    "sourceImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "adapterId",
+        "adapterVersion",
+        "sourceType",
+        "sourceName",
+        "sourceSha256",
+        "importedAt",
+        "capabilities"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "adapterId": {"type": "string"},
+        "adapterVersion": {"type": "string"},
+        "sourceType": {"type": "string"},
+        "sourceName": {"type": "string"},
+        "sourceSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "importedAt": {"type": "string", "format": "date-time"},
+        "embeddedPath": {"type": ["string", "null"]},
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": ["COMPLETE", "PARTIAL", "MISSING", "NOT_AVAILABLE", "NOT_APPLICABLE"]
+          }
+        },
+        "lossDiagnostics": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/diagnostic"},
+          "default": []
+        }
+      }
+    },
+    "logicalDesign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["components", "footprints", "netlist", "netClasses", "groups"],
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/component"}
+        },
+        "footprints": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/footprint"}
+        },
+        "netlist": {"$ref": "#/$defs/netlist"},
+        "netClasses": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/netClass"}
+        },
+        "groups": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/group"}
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "referenceDesignator", "footprintId", "placementPolicy", "provenance"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "referenceDesignator": {"type": "string", "minLength": 1},
+        "value": {"type": ["string", "null"]},
+        "partNumber": {"type": ["string", "null"]},
+        "manufacturer": {"type": ["string", "null"]},
+        "footprintId": {"$ref": "#/$defs/id"},
+        "placementPolicy": {
+          "enum": ["MOVABLE", "PRESERVE_PREFERRED", "LOCKED", "MECHANICAL_FIXED", "UNPLACED"]
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"},
+          "default": {}
+        },
+        "semanticRole": {"$ref": "#/$defs/sourcedValue"},
+        "sourceMetadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "footprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "origin", "pads"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "origin": {"$ref": "#/$defs/point"},
+        "body": {
+          "type": ["object", "null"],
+          "oneOf": [
+            {"$ref": "#/$defs/polygon"},
+            {"type": "null"}
+          ]
+        },
+        "courtyard": {
+          "type": ["object", "null"],
+          "oneOf": [
+            {"$ref": "#/$defs/polygon"},
+            {"type": "null"}
+          ]
+        },
+        "heightUnits": {"type": ["integer", "null"], "minimum": 0},
+        "pads": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/pad"}
+        },
+        "holes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/footprintHole"},
+          "default": []
+        },
+        "graphics": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/footprintGraphic"},
+          "default": []
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "pad": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "number", "position", "rotationDeg", "shape", "padType", "layerIds"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "number": {"type": "string"},
+        "name": {"type": ["string", "null"]},
+        "connectedPin": {"type": ["string", "null"]},
+        "position": {"$ref": "#/$defs/point"},
+        "rotationDeg": {"type": "number"},
+        "shape": {
+          "enum": ["CIRCLE", "RECT", "OVAL", "ROUNDRECT", "POLYGON", "CUSTOM"]
+        },
+        "sizeXUnits": {"type": ["integer", "null"], "minimum": 0},
+        "sizeYUnits": {"type": ["integer", "null"], "minimum": 0},
+        "customPolygon": {
+          "type": ["object", "null"],
+          "oneOf": [
+            {"$ref": "#/$defs/polygon"},
+            {"type": "null"}
+          ]
+        },
+        "padType": {
+          "enum": ["SMD", "THRU_HOLE", "NPTH", "CONNECTOR", "MECHANICAL"]
+        },
+        "layerIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "minItems": 1
+        },
+        "drillDiameterUnits": {"type": ["integer", "null"], "minimum": 0},
+        "maskExpansionUnits": {"type": ["integer", "null"]},
+        "pasteExpansionUnits": {"type": ["integer", "null"]}
+      }
+    },
+    "footprintHole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "diameterUnits", "plated"],
+      "properties": {
+        "position": {"$ref": "#/$defs/point"},
+        "diameterUnits": {"type": "integer", "minimum": 0},
+        "plated": {"type": "boolean"}
+      }
+    },
+    "footprintGraphic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "layerId", "geometry"],
+      "properties": {
+        "purpose": {
+          "enum": ["SILKSCREEN", "FAB", "COURTYARD", "ASSEMBLY", "USER_GRAPHICS"]
+        },
+        "layerId": {"$ref": "#/$defs/id"},
+        "geometry": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "netlist": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nets"],
+      "properties": {
+        "nets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/net"}
+        }
+      }
+    },
+    "net": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "endpoints", "electricalProperties", "routingProperties", "provenance"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "endpoints": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/padEndpoint"},
+          "minItems": 1
+        },
+        "netClassId": {"type": ["string", "null"]},
+        "electricalProperties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"}
+        },
+        "routingProperties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"}
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "padEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentId", "padId"],
+      "properties": {
+        "componentId": {"$ref": "#/$defs/id"},
+        "padId": {"$ref": "#/$defs/id"}
+      }
+    },
+    "netClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"},
+          "default": {}
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "groupType", "members"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "groupType": {
+          "enum": ["COMPONENT", "NET", "FUNCTIONAL", "MIXED_SEMANTIC"]
+        },
+        "parentGroupId": {"type": ["string", "null"]},
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entityType", "entityId"],
+            "properties": {
+              "entityType": {"type": "string"},
+              "entityId": {"$ref": "#/$defs/id"}
+            }
+          }
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"},
+          "default": {}
+        }
+      }
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "outline", "layers", "stackup", "regions", "keepouts", "holes"],
+      "properties": {
+        "origin": {"$ref": "#/$defs/point"},
+        "outline": {"$ref": "#/$defs/polygon"},
+        "cutouts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/polygon"},
+          "default": []
+        },
+        "holes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/boardHole"}
+        },
+        "thicknessUnits": {"type": ["integer", "null"], "minimum": 0},
+        "material": {"$ref": "#/$defs/sourcedValue"},
+        "layers": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/layer"},
+          "minItems": 1
+        },
+        "stackup": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/stackupEntry"}
+        },
+        "regions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/region"}
+        },
+        "keepouts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/keepout"}
+        }
+      }
+    },
+    "boardHole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "position", "diameterUnits", "plated"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "position": {"$ref": "#/$defs/point"},
+        "diameterUnits": {"type": "integer", "minimum": 0},
+        "plated": {"type": "boolean"},
+        "locked": {"type": "boolean", "default": true}
+      }
+    },
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "layerType", "order"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "layerType": {
+          "enum": [
+            "COPPER_SIGNAL",
+            "COPPER_PLANE",
+            "DIELECTRIC",
+            "SOLDER_MASK",
+            "PASTE",
+            "SILKSCREEN",
+            "MECHANICAL"
+          ]
+        },
+        "order": {"type": "integer"},
+        "thicknessUnits": {"type": ["integer", "null"], "minimum": 0},
+        "material": {"$ref": "#/$defs/sourcedValue"},
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"},
+          "default": {}
+        }
+      }
+    },
+    "stackupEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layerId"],
+      "properties": {
+        "layerId": {"$ref": "#/$defs/id"},
+        "referenceLayerIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        }
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "geometry"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "regionType": {"type": ["string", "null"]},
+        "geometry": {"$ref": "#/$defs/polygon"},
+        "layerIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"},
+          "default": {}
+        }
+      }
+    },
+    "keepout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "geometry", "appliesTo"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "geometry": {"$ref": "#/$defs/polygon"},
+        "layerIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        },
+        "appliesTo": {
+          "type": "array",
+          "items": {
+            "enum": ["COMPONENTS", "TRACKS", "VIAS", "COPPER_ZONES", "ALL"]
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "manufacturingProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "profileVersion", "capabilities", "provenance"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "profileVersion": {"type": "string"},
+        "templateSource": {"type": ["string", "null"]},
+        "lastValidatedAt": {"type": ["string", "null"], "format": "date-time"},
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"}
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "sourceSelector",
+        "parameters",
+        "enforcement",
+        "scope",
+        "provenance",
+        "enabled"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "type": {"type": "string", "minLength": 1},
+        "sourceSelector": {"$ref": "#/$defs/selector"},
+        "targetSelector": {
+          "type": ["object", "null"],
+          "oneOf": [
+            {"$ref": "#/$defs/selector"},
+            {"type": "null"}
+          ]
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "enforcement": {
+          "enum": ["REQUIRED", "PREFERRED", "OPTIMIZATION_GOAL"]
+        },
+        "scope": {"$ref": "#/$defs/constraintScope"},
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "reason": {"type": ["string", "null"]},
+        "enabled": {"type": "boolean"},
+        "userMetadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["ENTITY", "GROUP", "REGION", "CLASS", "QUERY", "ALL"]},
+        "entityType": {"type": ["string", "null"]},
+        "entityIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        },
+        "query": {"type": ["string", "null"]}
+      }
+    },
+    "constraintScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "layerIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        },
+        "measurement": {"type": ["string", "null"]},
+        "projectionMode": {"type": ["string", "null"]},
+        "geometryTypes": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": []
+        }
+      }
+    },
+    "semantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relationships"],
+      "properties": {
+        "relationships": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/semanticRelationship"}
+        }
+      }
+    },
+    "semanticRelationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "entityRefs", "provenance"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "type": {"type": "string"},
+        "entityRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "entityType", "entityId"],
+            "properties": {
+              "role": {"type": "string"},
+              "entityType": {"type": "string"},
+              "entityId": {"$ref": "#/$defs/id"}
+            }
+          },
+          "minItems": 1
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/sourcedValue"},
+          "default": {}
+        },
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "evidenceRefs": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": []
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "physicalDesignState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stateId",
+        "stateRevision",
+        "status",
+        "basedOnProjectRevision",
+        "componentPoses",
+        "routes",
+        "vias",
+        "copperZones"
+      ],
+      "properties": {
+        "stateId": {"$ref": "#/$defs/id"},
+        "stateRevision": {"type": "integer", "minimum": 0},
+        "status": {
+          "enum": [
+            "VALID",
+            "VALID_WITH_WARNINGS",
+            "INVALID_REQUIRES_REVIEW",
+            "PARTIALLY_ROUTED",
+            "UNROUTED",
+            "STALE_DERIVED_ANALYSIS"
+          ]
+        },
+        "basedOnProjectRevision": {"type": "integer", "minimum": 0},
+        "componentPoses": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/componentPose"}
+        },
+        "routes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/route"}
+        },
+        "vias": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/via"}
+        },
+        "copperZones": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/copperZone"}
+        },
+        "lastModifiedAt": {"type": ["string", "null"], "format": "date-time"},
+        "lastModifiedBy": {"type": ["string", "null"]}
+      }
+    },
+    "componentPose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentId", "x", "y", "rotationDeg", "side", "placementState"],
+      "properties": {
+        "componentId": {"$ref": "#/$defs/id"},
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+        "rotationDeg": {"type": "number"},
+        "side": {"enum": ["TOP", "BOTTOM"]},
+        "placementState": {
+          "enum": ["PLACED", "UNPLACED", "LOCKED", "TEMPORARILY_FROZEN", "PRESERVE_PREFERRED"]
+        },
+        "lastModifiedBy": {"type": ["string", "null"]}
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "netId", "status", "policy", "trackSegments", "viaIds", "provenance"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "netId": {"$ref": "#/$defs/id"},
+        "status": {
+          "enum": ["ROUTED", "PARTIAL", "UNROUTED", "STALE", "INVALID"]
+        },
+        "policy": {
+          "enum": ["REROUTABLE", "PRESERVE_PREFERRED", "LOCKED"]
+        },
+        "trackSegments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/trackSegment"}
+        },
+        "viaIds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "trackSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "geometryKind", "layerId", "widthUnits", "start", "end"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "geometryKind": {"enum": ["LINE", "ARC"]},
+        "layerId": {"$ref": "#/$defs/id"},
+        "widthUnits": {"type": "integer", "exclusiveMinimum": 0},
+        "start": {"$ref": "#/$defs/point"},
+        "end": {"$ref": "#/$defs/point"},
+        "arcCenter": {
+          "type": ["object", "null"],
+          "oneOf": [
+            {"$ref": "#/$defs/point"},
+            {"type": "null"}
+          ]
+        },
+        "clockwise": {"type": ["boolean", "null"]}
+      }
+    },
+    "via": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "netId",
+        "position",
+        "startLayerId",
+        "endLayerId",
+        "viaType",
+        "drillDiameterUnits",
+        "outerDiameterUnits",
+        "policy"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "netId": {"$ref": "#/$defs/id"},
+        "position": {"$ref": "#/$defs/point"},
+        "startLayerId": {"$ref": "#/$defs/id"},
+        "endLayerId": {"$ref": "#/$defs/id"},
+        "viaType": {"enum": ["THROUGH", "BLIND", "BURIED", "MICROVIA"]},
+        "drillDiameterUnits": {"type": "integer", "exclusiveMinimum": 0},
+        "outerDiameterUnits": {"type": "integer", "exclusiveMinimum": 0},
+        "policy": {"enum": ["REROUTABLE", "PRESERVE_PREFERRED", "LOCKED"]},
+        "padstackMetadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "copperZone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "layerId", "geometry", "policy"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "netId": {"type": ["string", "null"]},
+        "layerId": {"$ref": "#/$defs/id"},
+        "geometry": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/polygon"}
+        },
+        "clearanceUnits": {"type": ["integer", "null"], "minimum": 0},
+        "priority": {"type": "integer", "default": 0},
+        "policy": {"enum": ["REROUTABLE", "PRESERVE_PREFERRED", "LOCKED"]},
+        "fillSettings": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "reviewDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "decisionType", "fingerprint", "createdAt", "createdBy"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "decisionType": {"enum": ["ACKNOWLEDGEMENT", "WAIVER", "ACCEPTED_RISK", "NOTE"]},
+        "fingerprint": {"type": "string"},
+        "entityRefs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        },
+        "reason": {"type": ["string", "null"]},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "createdBy": {"type": "string"}
+      }
+    },
+    "projectSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optimizationIntent", "exportProfiles"],
+      "properties": {
+        "optimizationIntent": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exportProfiles": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/exportProfile"}
+        },
+        "sourceEmbeddingPolicy": {
+          "enum": ["EMBED", "REFERENCE_ONLY", "ASK"]
+        }
+      }
+    },
+    "exportProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "profileType", "settings"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "name": {"type": "string"},
+        "profileType": {
+          "enum": [
+            "GERBER_MANUFACTURING",
+            "DIY_TRANSFER",
+            "INSPECTION_RENDER",
+            "EDA_ROUNDTRIP",
+            "IPC2581",
+            "CNC_FUTURE"
+          ]
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "category", "message", "blocking"],
+      "properties": {
+        "code": {"type": "string"},
+        "severity": {"enum": ["INFO", "WARNING", "ERROR", "FATAL"]},
+        "category": {"type": "string"},
+        "message": {"type": "string"},
+        "entityRefs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "default": []
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "remediation": {"type": ["string", "null"]},
+        "source": {"type": ["string", "null"]},
+        "blocking": {"type": "boolean"}
+      }
+    }
+  }
+}
