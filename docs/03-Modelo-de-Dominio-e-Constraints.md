@@ -30,11 +30,13 @@ Design
  ├── Regions
  ├── Constraints
  ├── SemanticRelationships
- ├── PhysicalState
+ ├── PhysicalDesignState
  ├── Findings
  ├── DesignMemory
  └── OptimizationProfile
 ```
+
+`PhysicalDesignState` é o nome canônico vigente para o estado físico conjunto de placement+routing. Termos anteriores como `PhysicalState`/`BoardState` devem ser tratados como nomenclatura histórica.
 
 ## 3. Board
 
@@ -515,6 +517,8 @@ O domínio precisa resolver `EffectiveConstraintSet` para cada objeto/relacionam
 
 Quando duas regras são compatíveis, a mais específica pode prevalecer. Quando são contraditórias, deve existir diagnóstico explícito.
 
+A execução concreta de resolution/evaluation está detalhada no documento `10`.
+
 ## 26. Constraint Validation
 
 Antes de otimizar, o engine deve detectar:
@@ -567,7 +571,9 @@ Possíveis objetivos:
 
 Pesos precisam ser configuráveis e auditáveis.
 
-## 28. PhysicalState
+A normalização concreta das métricas é parte da estratégia local e deve ser registrada em run metadata.
+
+## 28. PhysicalDesignState
 
 O estado físico corrente deve conter simultaneamente:
 
@@ -630,7 +636,7 @@ Exemplos:
 - analog/switching proximity;
 - manufacturing risk.
 
-## 31. DesignTransaction
+## 31. PhysicalDesignTransaction
 
 Toda modificação relevante deve poder ser representada como transação.
 
@@ -697,7 +703,7 @@ Para manter avaliação barata, o geometry engine provavelmente precisará de in
 - region lookup;
 - affected neighborhood discovery.
 
-A estrutura específica será decidida na implementação.
+O documento `10` fixa como direção v0.1 um broad-phase spatial index mutável separado do exact geometry kernel, com Quadtree como candidate inicial.
 
 ## 35. Unidades
 
@@ -716,6 +722,8 @@ Categorias:
 
 Serialização PRDX deve guardar unidade ou usar uma unidade canônica documentada.
 
+A direção v0.1 para coordenadas físicas é `Int64` em micrômetros, sujeita a validação no bootstrap do geometry kernel.
+
 ## 36. Determinismo e reproducibilidade
 
 Uma run precisa registrar:
@@ -723,6 +731,7 @@ Uma run precisa registrar:
 - design version/hash;
 - constraint version/hash;
 - optimizer settings;
+- algorithm strategy versions;
 - model/provider/version quando houver IA;
 - seed dos algoritmos estocásticos;
 - manufacturing profile;
