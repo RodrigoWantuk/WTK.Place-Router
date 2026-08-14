@@ -2,11 +2,9 @@
 
 ## 1. Objetivo
 
-Este documento consolida decisões arquiteturais que já foram discutidas e evita que documentos anteriores sejam interpretados como se todas as opções ainda estivessem igualmente abertas.
+Este documento consolida decisões arquiteturais vigentes e evita que documentos anteriores sejam interpretados como se todas as opções ainda estivessem igualmente abertas.
 
-Ele também padroniza terminologia que apareceu com nomes diferentes durante a fase inicial de arquitetura.
-
-A regra é:
+Estados:
 
 - **Accepted** — direção arquitetural vigente;
 - **Provisional** — direção atual, ainda sujeita a benchmark/ADR mais específico;
@@ -24,28 +22,15 @@ Nome canônico:
 PhysicalDesignState
 ```
 
-Representa o estado físico conjunto de placement + routing sobre o qual optimizer, transactions, verification e UI operam.
+Representa placement + routing conjuntos sobre os quais optimizer, transactions, verification, persistence e UI operam.
 
-Termos históricos encontrados nos documentos:
+`BoardState` e `PhysicalState`, encontrados em textos mais antigos, são aliases históricos quando se referirem ao mesmo conceito.
 
-```text
-BoardState
-PhysicalState
-```
-
-Devem ser interpretados como referências conceituais antigas ao mesmo tipo de estado, salvo quando o contexto indicar explicitamente um snapshot/modelo diferente.
-
-Novos contracts/classes devem usar `PhysicalDesignState`.
-
-### Transaction
-
-Nome canônico:
+Transaction canônica:
 
 ```text
 PhysicalDesignTransaction
 ```
-
-`DesignTransaction` pode permanecer como abreviação textual, mas a API principal deve usar o nome completo quando houver risco de ambiguidade.
 
 ---
 
@@ -64,17 +49,13 @@ Docking                Dock.Avalonia family
 Engine                 Headless / platform-agnostic
 ```
 
-A versão exata de .NET/Avalonia/Dock é uma decisão de implementação a ser fixada no bootstrap do código usando versões estáveis/suportadas naquele momento.
+Versões exatas são fixadas no bootstrap usando releases estáveis/suportadas.
 
 ---
 
 ## 4. Fronteiras arquiteturais
 
 ### Accepted
-
-MVVM é padrão somente da Presentation Layer.
-
-A aplicação segue conceitualmente:
 
 ```text
 Presentation (Avalonia/MVVM)
@@ -85,8 +66,6 @@ Domain + deterministic engines
           ↓
 Infrastructure / adapters
 ```
-
-Princípios:
 
 - ViewModels não executam geometry/routing/LLM diretamente;
 - Domain não referencia Avalonia;
@@ -100,9 +79,9 @@ Princípios:
 
 ### Accepted
 
-Usar patterns onde resolvem um problema concreto, sem transformar o projeto em uma implementação ritualística de GoF/Clean Architecture.
+Usar patterns somente quando resolvem problema concreto.
 
-#### Strategy
+### Strategy
 
 Para algoritmos substituíveis/benchmarkáveis:
 
@@ -114,30 +93,21 @@ geometry kernel adapter
 candidate scoring strategy
 ```
 
-#### Transaction / Command-like actions
+### Transaction / Command-like actions
 
-Mudanças físicas devem ser actions tipadas dentro de `PhysicalDesignTransaction`.
+Mudanças físicas são actions tipadas em `PhysicalDesignTransaction`, sustentando undo/redo, replay, audit, candidates, regression e explainability.
 
-Isso sustenta:
+### Data-driven constraints + evaluator registry
 
-- undo/redo;
-- replay;
-- audit;
-- candidate isolation;
-- regression;
-- explainability.
+Constraints são dados tipados com evaluators registrados.
 
-#### Data-driven constraints + evaluator registry
-
-Constraints são principalmente dados tipados com evaluators registrados, evitando uma árvore OO gigantesca para cada regra trivial.
-
-#### Composite
+### Composite
 
 Groups hierárquicos.
 
-#### Domain events
+### Domain events
 
-Para invalidation/recomputation/review triggers, sem depender de um framework pesado de event bus.
+Invalidation/recomputation/review triggers sem framework pesado obrigatório.
 
 ---
 
@@ -145,7 +115,7 @@ Para invalidation/recomputation/review triggers, sem depender de um framework pe
 
 ### Accepted
 
-Arquitetura visual no estilo CAD/IDE:
+Shell CAD/IDE:
 
 ```text
 TitleBar
@@ -162,11 +132,7 @@ Design Navigator | Board Workspace | Constraint Composer + Inspector
                   Bottom Workbench
 ```
 
-Painéis auxiliares são Tool docks destacáveis, redimensionáveis e multi-monitor.
-
-Board/document surfaces usam DocumentDock.
-
-O `PcbViewportControl` usa rendering especializado; entidades físicas não são milhares de Avalonia Controls.
+Tools são dockáveis/flutuantes; board surfaces usam DocumentDock; `PcbViewportControl` usa rendering especializado.
 
 ---
 
@@ -180,11 +146,7 @@ Provider inicial:
 DeepSeek
 ```
 
-A escolha é operacional, não arquitetural.
-
-O Place&Router usa uma abstração provider-agnostic.
-
-Model/provider usados em cada run devem ser registrados para replay/benchmark.
+A escolha é operacional. O Agent usa abstraction provider-agnostic e cada run registra provider/model.
 
 Detalhes no ADR-0001.
 
@@ -194,9 +156,7 @@ Detalhes no ADR-0001.
 
 ### Accepted
 
-Toda chamada é uma `AgentOperation` tipada/versionada.
-
-Formato conceitual:
+Toda chamada é `AgentOperation` tipada/versionada:
 
 ```text
 Stable policy
@@ -207,7 +167,7 @@ Stable policy
 
 A IA fica fora do numerical inner loop.
 
-A resposta passa por:
+Resposta:
 
 ```text
 schema validation
@@ -225,95 +185,81 @@ A IA nunca declara DRC/final validity.
 
 ### Accepted — direção
 
-O engine local deve preferir teoria consolidada e bibliotecas maduras antes de custom algorithms e antes de cloud reasoning.
-
-Ordem:
+Preferir teoria consolidada e bibliotecas maduras antes de custom algorithm e antes de cloud reasoning.
 
 ```text
 known deterministic algorithm / mature library
         ↓
-small Place&Router composition/adaptation
+Place&Router composition/adaptation
         ↓
-custom algorithm only after benchmark evidence
+custom algorithm after benchmark evidence
         ↓
 LLM only for semantic/strategic ambiguity
 ```
 
 ### Geometry
 
-Accepted direction:
-
-- canonical physical coordinates em `Int64`;
-- unidade inicial proposta de 1 µm;
+- coordinates `Int64`;
+- 1 µm como unidade canônica inicial;
 - `IGeometryKernel` abstrato;
-- Clipper2 como strong candidate para clipping/offsetting/boolean geometry;
-- broad-phase spatial index separado do exact geometry test;
-- NetTopologySuite Quadtree como candidate inicial de índice mutável.
+- Clipper2 strong candidate;
+- broad phase separado de exact geometry;
+- NetTopologySuite Quadtree candidate inicial para índice mutável.
 
 ### Placement
 
-Accepted direction:
-
 ```text
 fixed/mechanical-first
-→ graph/region-oriented coarse seed
+→ graph/region-oriented seed
 → legalization
 → fast multi-fidelity evaluation
 → LNS
 → Simulated Annealing refinement
 ```
 
-LNS é a estrutura principal de reabertura de neighborhoods; SA é o mecanismo inicial para exploração/escape de mínimos locais.
-
 ### Routing
-
-Accepted direction:
 
 ```text
 pin access
-→ global routing / resource reservation
+→ global routing/resource reservation
 → detailed routing
 → negotiated rip-up/reroute
-→ placement repair when routing evidence requires it
+→ placement repair when evidence requires it
 ```
 
-- coarse capacity grid por layer;
-- HPWL seguido de RMST/RSMT quando maior fidelidade for necessária;
-- FLUTE/equivalente como candidate de RSMT rápido;
-- A*/Dijkstra no global routing;
-- negotiated congestion PathFinder-like;
-- A* 2.5D como detailed route search inicial;
-- Hadlock como Strategy/benchmark futuro;
-- obstacle inflation para clearance;
+- coarse capacity grid;
+- HPWL → RMST/RSMT conforme fidelidade;
+- FLUTE/equivalente candidate;
+- A*/Dijkstra global;
+- PathFinder-like negotiated congestion;
+- A* 2.5D detailed router;
+- Hadlock como future Strategy/benchmark;
+- obstacle inflation;
 - exact DRC pós-rota.
 
 ### Constraint pre-solving
 
-OR-Tools CP-SAT é candidate opcional apenas para pequenos subproblemas discretos bem delimitados. Não é o placement/geometry engine principal.
+OR-Tools CP-SAT é opcional para pequenos subproblemas discretos, não geometry/placement engine principal.
 
 ### Benchmark-gated
 
-Ainda não são escolhas finais:
-
 - grid resolution;
 - spatial index definitivo;
-- uso definitivo de FLUTE;
+- FLUTE definitivo;
 - SA schedule;
 - LNS sizes;
-- score weights/normalization;
+- score normalization/weights;
 - routing→placement escalation threshold;
-- native geometry acceleration;
-- CP-SAT adoption em produção.
+- native acceleration;
+- CP-SAT production use.
 
 Detalhes em `10-Processamento-Local-e-Algoritmos-Deterministicos.md` e ADR-0003.
 
 ---
 
-## 10. Princípio de redução de input do usuário
+## 10. Redução de input do usuário
 
 ### Accepted
-
-A UX segue:
 
 ```text
 IMPORT
@@ -323,11 +269,7 @@ IMPORT
 → ASK USER ONLY IF MATERIAL
 ```
 
-O sistema não deve exigir preenchimento em massa de propriedades apenas porque o schema possui campos opcionais.
-
-`Unknown` é válido.
-
-Uma pergunta é mostrada quando o dependency analysis indicar que aquela ausência bloqueia ou degrada materialmente uma decisão atual.
+`Unknown` é válido. A UI pergunta somente quando dependency analysis mostrar impacto material na decisão atual.
 
 ---
 
@@ -335,22 +277,16 @@ Uma pergunta é mostrada quando o dependency analysis indicar que aquela ausênc
 
 ### Accepted
 
-Credenciais de provider:
+Credenciais:
 
 - não entram em PRDX;
 - não entram em project JSON;
 - não aparecem em logs normais;
-- ficam em configuração segura/local apropriada à plataforma.
+- ficam em configuração segura/local apropriada.
 
-O contexto enviado à cloud deve ser minimizado pela operação e registrado/auditável conforme policy do produto.
+Cloud context é minimizado por operation. UI deixa claro provider/model e quando uma operação é cloud/local.
 
-A UI deve deixar claro:
-
-- provider/model ativo;
-- quando uma operação cloud está sendo usada;
-- quando uma ação é totalmente local.
-
-Um provider local/offline futuro deve poder substituir DeepSeek sem alterar Domain/AgentOperation contracts.
+Provider local futuro pode substituir DeepSeek sem alterar Domain/AgentOperation contracts.
 
 ---
 
@@ -358,7 +294,7 @@ Um provider local/offline futuro deve poder substituir DeepSeek sem alterar Doma
 
 ### Accepted
 
-Separar explicitamente:
+Separar:
 
 ```text
 incorporated library
@@ -366,9 +302,7 @@ algorithmic/reference material
 external benchmark
 ```
 
-Toda biblioteca incorporada passa por verificação de licença, versão, boundary arquitetural e testes próprios.
-
-Ferramentas com licença incompatível podem permanecer como referência teórica/comportamental ou benchmark externo, sem incorporação de código.
+Toda biblioteca incorporada passa por gate de licença, versionamento, boundary e testes.
 
 Detalhes no ADR-0004.
 
@@ -378,33 +312,185 @@ Detalhes no ADR-0004.
 
 ### Accepted
 
-- canonical model interno desacoplado do EDA;
-- PRDX como nome provisório do formato/modelo persistível;
+- canonical model desacoplado do EDA;
 - EasyEDA como primeiro adapter prático provável;
 - arquitetura preparada para KiCad/Specctra/IPC-2581/outros;
-- round-trip export é objetivo arquitetural.
-
-### Provisional
-
-O formato exato PRDX v0.1 ainda precisa de JSON Schema formal.
+- round-trip export é objetivo arquitetural;
+- import/export deve produzir capabilities/loss diagnostics.
 
 ---
 
-## 14. Joint placement/routing
+## 14. PRDX — formato de projeto
+
+### Accepted
+
+PRDX deixa de ser apenas nome provisório conceitual e passa a ser o **formato nativo de projeto da primeira implementação**.
+
+```text
+extension              .prdx
+container              ZIP
+canonical payload      JSON
+schema                  JSON Schema Draft 2020-12
+manifest                manifest.json
+project payload         project.json
+```
+
+O `.prdx` contém:
+
+```text
+logical design
+components/footprints/pads
+netlist/nets
+board/stackup
+manufacturing snapshot
+constraints
+semantics
+groups/regions
+accepted PhysicalDesignState
+placement
+routing/vias/copper zones
+persistent user decisions
+project export/optimization profiles
+```
+
+Schemas iniciais:
+
+- `schemas/prdx/0.1/prdx-manifest.schema.json`;
+- `schemas/prdx/0.1/prdx-project.schema.json`.
+
+Detalhes no documento `11` e ADR-0005.
+
+---
+
+## 15. Separação Project / Workspace / Run / Cache
+
+### Accepted
+
+```text
+PROJECT   → .prdx
+WORKSPACE → local UI state
+RUN       → .prdxrun/run store
+CACHE     → regenerable local data
+```
+
+O project file não guarda A* sets, RoutingGrid temporário, SA temperature, rejected candidates, dock layout ou credentials.
+
+---
+
+## 16. Lifecycle de edição manual
+
+### Accepted
+
+Manual edits usam:
+
+```text
+PhysicalDesignTransaction
+→ EditImpactPlanner
+→ DependencyGraph
+→ AffectedScope + EarliestInvalidStage
+→ selective invalidation
+→ RecoveryPlanner
+→ regenerated diagnostics/findings
+```
+
+Não usar rollback cronológico cego.
+
+Mover componente/track invalida somente dependências relevantes quando possível.
+
+Usuário pode produzir state temporariamente inválido durante edição; hard violations geram findings e bloqueiam sign-off/fabrication, mas não precisam impedir todo movimento interativo.
+
+Runs antigas tornam-se `STALE_BASELINE` se project/state revision mudar e nunca sobrescrevem silenciosamente estado atual.
+
+---
+
+## 17. Persistência e recovery
+
+### Accepted
+
+- save `.prdx` é atômico;
+- usar temporary archive + validation/hash + replace;
+- edits de sessão usam recovery journal/checkpoints locais;
+- journal é compactado/limpo após Save;
+- Undo/Redo usa as mesmas domain transactions.
+
+---
+
+## 18. Export architecture
+
+### Accepted
+
+Todo output é projection de PRDX/`PhysicalDesignState` através de `ExportProfile` + exporter.
+
+Classes:
+
+```text
+Manufacturing
+DIY transfer/artwork
+Inspection/documentation
+EDA round-trip
+Rich standardized exchange
+Machine-specific future outputs
+```
+
+Fabrication export requer ausência de blocking Required violations por padrão.
+
+---
+
+## 19. Export targets
+
+### Accepted — v0.1 direction
+
+Manufacturing inicial:
+
+```text
+Gerber Layer Format
++ NC drill
++ Gerber Job/manifest when useful
+```
+
+DIY transfer:
+
+```text
+PDF
+SVG
+PNG
+TIFF
+```
+
+com 1:1 scale, mirror per layer, positive/negative, registration/drill/calibration marks e explicit DPI para raster.
+
+Inspection/documentation:
+
+```text
+PNG
+SVG
+PDF
+```
+
+### Planned
+
+```text
+IPC-2581 / IPC-DPMX
+Specctra DSN/SES round-trip
+EasyEDA/KiCad native round-trip
+CNC/isolation outputs via MachineProfile
+```
+
+Detalhes no documento `11` e ADR-0005.
+
+---
+
+## 20. Joint placement/routing
 
 ### Accepted
 
 Não existe top-level `PlacementEngine → RoutingEngine → Done`.
 
-Routing pode reabrir placement.
-
-Placement deve consumir feedback de routability/corridors antes de routing final.
-
-A abstração superior trabalha sobre o mesmo `PhysicalDesignState`.
+Routing pode reabrir placement; placement consome feedback de routability/corridors. Tudo trabalha sobre `PhysicalDesignState`.
 
 ---
 
-## 15. Validade versus qualidade
+## 21. Validade versus qualidade
 
 ### Accepted
 
@@ -414,57 +500,44 @@ Preferences       → cost
 Goals             → optimization metric
 ```
 
-Nenhum score positivo compensa uma Required violation.
+Nenhum score positivo compensa Required violation.
 
 ---
 
-## 16. Roadmap como dependências, não waterfall rígido
+## 22. Roadmap como dependências, não waterfall
 
 ### Accepted
 
-As fases do documento `06` descrevem principalmente **ordem de dependência técnica**, não uma obrigação de terminar todo o engine antes de começar UI/Agent infrastructure.
-
-Workstreams podem avançar em paralelo quando contracts mínimos estiverem estáveis.
-
-Exemplo:
-
-```text
-Core/Geometry ───────────────→ Routing/Search
-      │
-      ├────→ PRDX/Importer
-      │         │
-      │         └────→ Constraint Workspace UI
-      │
-      └────→ Domain contracts ─────→ Desktop shell/UI
-
-Agent protocol/provider adapter pode ser implementado/testado com fixtures
-antes de o optimizer final existir, mas não deve substituir engine capabilities.
-```
+Fases do documento `06` representam principalmente dependências técnicas. Workstreams podem avançar em paralelo quando contracts mínimos estiverem estáveis.
 
 ---
 
-## 17. Open decisions
+## 23. Open decisions
 
-Ainda propositalmente abertas:
+Ainda abertas ou benchmark-gated:
 
-- versão final de .NET/Avalonia na primeira solução;
+- versão final de .NET/Avalonia no bootstrap;
 - package names finais;
-- formato PRDX v0.1 completo;
-- first EasyEDA handoff concreto;
+- primeiro handoff EasyEDA concreto;
 - score normalization final;
 - thermal/SI/PI solver depth;
-- provider/model routing depois dos benchmarks iniciais;
-- política comercial/licenciamento geral do projeto;
-- eventual engine out-of-process versus in-process;
-- search avançado/MCTS/ML.
+- provider/model routing pós-benchmarks;
+- política comercial/licenciamento geral;
+- engine in-process versus out-of-process futuramente;
+- search avançado/MCTS/ML;
+- conformance/profile exatos de cada exporter além do baseline v0.1;
+- políticas finais de reimport/rebase complexos.
+
+O **formato PRDX v0.1 base não é mais uma decisão aberta**; evoluções são versionadas/migradas.
 
 ---
 
-## 18. ADRs
+## 24. ADRs
 
 - `ADR-0001` — DeepSeek como provider inicial;
 - `ADR-0002` — Stack desktop e fronteiras arquiteturais;
 - `ADR-0003` — Processamento local e estratégia algorítmica;
-- `ADR-0004` — Gate de licenciamento para dependências algorítmicas.
+- `ADR-0004` — Gate de licenciamento para dependências algorítmicas;
+- `ADR-0005` — PRDX, persistência, lifecycle de edição e exportação.
 
-Novas decisões concretas que alterem architecture/invariants devem ganhar ADR próprio em vez de ficarem somente em conversa ou comentários de código.
+Novas decisões que alterem invariants devem ganhar ADR próprio.
