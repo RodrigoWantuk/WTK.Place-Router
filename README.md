@@ -23,6 +23,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - Project, workspace, optimization run e cache são persistências distintas. Alterações manuais usam dependency-driven invalidation para reexecutar apenas o menor estágio/scope necessário.
 - Export parte sempre do estado canônico e contempla fabricação industrial, round-trip EDA, imagens/documentação e arte 1:1 para processos artesanais/transferência.
 - O primeiro handoff físico concreto com EasyEDA Pro usa **Specctra DSN** como entrada baseline; SES é tratado inicialmente como retorno de wires/vias, sem presumir round-trip completo de placement.
+- Agentes de implementação trabalham exclusivamente a partir dos planos aprovados em `/plan`, obedecendo `/AGENTS.md`, dependências, documentação e ADRs.
 
 ## Documentação inicial
 
@@ -38,6 +39,27 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 10. [Decisões arquiteturais e terminologia](docs/09-Decisoes-Arquiteturais-e-Terminologia.md)
 11. [Processamento local e algoritmos determinísticos](docs/10-Processamento-Local-e-Algoritmos-Deterministicos.md)
 12. [Formato de projeto, persistência, lifecycle e exportação](docs/11-Formato-de-Projeto-Persistencia-Lifecycle-e-Exportacao.md)
+
+## Planos de implementação aprovados
+
+A implementação da v0.1 é governada por [`plan/README.md`](plan/README.md) e pelo [`plan/00-ROADMAP-MESTRE-V0.1.md`](plan/00-ROADMAP-MESTRE-V0.1.md).
+
+Sequência de entregas:
+
+1. [Bootstrap, Core e PRDX Runtime](plan/01-Bootstrap-Core-e-PRDX-Runtime.md)
+2. [Geometry Kernel, Spatial Index e Constraint Engine](plan/02-Geometry-Spatial-Index-e-Constraint-Engine.md)
+3. [Importação, Project Lifecycle, Transactions e Invalidation](plan/03-Importacao-Project-Lifecycle-Transactions-e-Invalidation.md)
+4. [Desktop Shell e Experiência Básica de Projeto](plan/04-Desktop-Shell-e-Experiencia-Basica-de-Projeto.md)
+5. [Constraint Workspace e Enriquecimento Automático](plan/05-Constraint-Workspace-e-Enriquecimento-Automatico.md)
+6. [Fast Evaluation e Global Routing](plan/06-Fast-Evaluation-e-Global-Routing.md)
+7. [Detailed Routing, DRC e Rip-up/Reroute](plan/07-Detailed-Routing-DRC-e-Ripup-Reroute.md)
+8. [Placement Search, Joint Optimizer e Regression](plan/08-Placement-Search-Joint-Optimizer-e-Regression.md)
+9. [Edição Física Interativa e Recovery](plan/09-Edicao-Fisica-Interativa-e-Recovery.md)
+10. [Semantics e Agent IA DeepSeek](plan/10-Semantics-e-Agent-IA-DeepSeek.md)
+11. [Export Pipeline e Artefatos de Fabricação](plan/11-Export-Pipeline-e-Artefatos-de-Fabricacao.md)
+12. [Integração, Produto v0.1 e Release Validation](plan/12-Integracao-Produto-V0.1-e-Release-Validation.md)
+
+A numeração ajuda na navegação, mas o plano mestre define o grafo real de dependências e quais workstreams podem avançar em paralelo.
 
 ## Schemas
 
@@ -56,4 +78,4 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 
 ## Estado
 
-A documentação atual é um **plano conceitual e arquitetural em consolidação**, já acompanhado pelos primeiros contracts formais de persistência. Ela registra decisões, hipóteses, schemas e direções de implementação discutidas antes do início do código principal. Itens marcados como candidatos/benchmark-gated devem ser validados experimentalmente antes de serem tratados como escolha final de implementação.
+A documentação atual já inclui **arquitetura, contracts formais iniciais e planos de implementação aprovados para a v0.1**. Itens marcados como candidatos/benchmark-gated continuam sujeitos a validação experimental, mas agentes de implementação devem seguir os planos aprovados e os ADRs vigentes em vez de redefinir a arquitetura durante a execução.
