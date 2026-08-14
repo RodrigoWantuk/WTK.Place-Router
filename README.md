@@ -19,6 +19,9 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - O processamento local deve preferir teoria consolidada e bibliotecas maduras antes de algoritmos custom: geometry/indexing determinísticos, LNS + Simulated Annealing para placement, global routing por capacidade/congestionamento e detailed routing baseado em graph search/rip-up-reroute.
 - A UX segue a regra **importar/derivar/inferir antes de perguntar**: o usuário só deve ser interrompido por dados desconhecidos que sejam materialmente necessários para a decisão atual.
 - Biblioteca incorporada, referência algorítmica e benchmark externo são categorias distintas; dependências de terceiros passam por gate explícito de licenciamento.
+- O formato nativo de projeto é `.prdx`: container ZIP versionado com `manifest.json` + `project.json`, contendo logical design, constraints, semantics, manufacturing assumptions e o `PhysicalDesignState` aceito, incluindo placement e routing.
+- Project, workspace, optimization run e cache são persistências distintas. Alterações manuais usam dependency-driven invalidation para reexecutar apenas o menor estágio/scope necessário.
+- Export parte sempre do estado canônico e contempla fabricação industrial, round-trip EDA, imagens/documentação e arte 1:1 para processos artesanais/transferência.
 
 ## Documentação inicial
 
@@ -33,6 +36,12 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 9. [Protocolo de iterações com IA e fronteira determinística](docs/08-Protocolo-de-Iteracoes-com-IA.md)
 10. [Decisões arquiteturais e terminologia](docs/09-Decisoes-Arquiteturais-e-Terminologia.md)
 11. [Processamento local e algoritmos determinísticos](docs/10-Processamento-Local-e-Algoritmos-Deterministicos.md)
+12. [Formato de projeto, persistência, lifecycle e exportação](docs/11-Formato-de-Projeto-Persistencia-Lifecycle-e-Exportacao.md)
+
+## Schemas
+
+- [PRDX 0.1 — manifest](schemas/prdx/0.1/prdx-manifest.schema.json)
+- [PRDX 0.1 — canonical project](schemas/prdx/0.1/prdx-project.schema.json)
 
 ## ADRs
 
@@ -40,7 +49,8 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - [ADR-0002 — Stack desktop e fronteiras arquiteturais](docs/adr/0002-Stack-Desktop-e-Fronteiras-Arquiteturais.md)
 - [ADR-0003 — Processamento local e estratégia algorítmica](docs/adr/0003-Processamento-Local-e-Estrategia-Algoritmica.md)
 - [ADR-0004 — Gate de licenciamento para dependências algorítmicas](docs/adr/0004-Licenciamento-de-Dependencias-Algoritmicas.md)
+- [ADR-0005 — PRDX, persistência, lifecycle de edição e exportação](docs/adr/0005-PRDX-Persistencia-Lifecycle-e-Exportacao.md)
 
 ## Estado
 
-A documentação atual é um **plano conceitual e arquitetural em consolidação**. Ela registra decisões, hipóteses, contracts conceituais e direções de implementação discutidas antes do início do código principal. Itens marcados como candidatos/benchmark-gated devem ser validados experimentalmente antes de serem tratados como escolha final de implementação.
+A documentação atual é um **plano conceitual e arquitetural em consolidação**, já acompanhado pelos primeiros contracts formais de persistência. Ela registra decisões, hipóteses, schemas e direções de implementação discutidas antes do início do código principal. Itens marcados como candidatos/benchmark-gated devem ser validados experimentalmente antes de serem tratados como escolha final de implementação.
