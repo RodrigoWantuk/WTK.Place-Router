@@ -25,6 +25,8 @@ PhysicalDesignTransaction
 PhysicalDesignOptimizer
 ```
 
+> A estratégia algorítmica local v0.1 — geometry/indexing, HPWL/RMST/RSMT, LNS, Simulated Annealing, global routing por capacidade, negotiated congestion, A* detailed routing e rip-up/reroute — está detalhada em [`10-Processamento-Local-e-Algoritmos-Deterministicos.md`](10-Processamento-Local-e-Algoritmos-Deterministicos.md). Este documento permanece focado na arquitetura conjunta do optimizer.
+
 ## 2. Estado otimizado
 
 O optimizer pode modificar, respeitando locks e constraints:
@@ -96,7 +98,7 @@ Barato:
 - pad distances;
 - HPWL;
 - Manhattan estimates;
-- Steiner-like approximations;
+- RMST/RSMT approximations quando necessário;
 - fanout difficulty;
 - local density.
 
@@ -177,15 +179,22 @@ Essa estrutura é uma das principais ligações entre placement e routing futuro
 
 A primeira versão não deve depender de RL para desenhar cada segmento.
 
-O detailed router pode usar combinações de técnicas clássicas, como:
+A direção v0.1 é:
 
-- A*;
-- maze routing;
-- Lee/Hadlock-like methods;
-- negotiated congestion;
-- rip-up and reroute;
+- global routing sobre resource grid coarse;
+- A*/Dijkstra-like search para guides;
+- negotiated congestion/rip-up-reroute;
+- pin-access analysis;
+- A* 2.5D como detailed route search inicial;
+- Hadlock como Strategy/benchmark possível;
+- exact geometry/DRC depois da geração da rota.
+
+Outras técnicas podem entrar futuramente:
+
+- Lee/maze variants;
 - visibility graph onde fizer sentido;
-- push-and-shove futuramente.
+- push-and-shove;
+- specialized differential-pair search.
 
 A IA pode decidir estratégia; o router calcula geometria exata.
 
@@ -270,7 +279,7 @@ Estimated disruption:
 
 ## 10. Large Neighborhood Search
 
-LNS é um candidato forte para as primeiras versões porque permite destruir/reotimizar partes controladas do design.
+LNS é a estrutura principal v0.1 de reabertura/reotimização controlada porque permite destruir/reotimizar partes relacionadas do design.
 
 Neighborhoods possíveis:
 
@@ -302,7 +311,7 @@ accept best improvement or controlled uphill move
 
 ## 11. Simulated Annealing
 
-Simulated Annealing pode complementar LNS para evitar ficar preso em mínimos locais.
+Simulated Annealing complementa LNS na estratégia v0.1 para evitar ficar preso em mínimos locais.
 
 Movimentos candidatos:
 
@@ -316,6 +325,8 @@ Movimentos candidatos:
 - layer reassignment.
 
 Todas as ações passam por hard-constraint filtering.
+
+O temperature schedule exato é benchmark-gated, não uma decisão arquitetural fixa.
 
 ## 12. MCTS como evolução, não pré-requisito
 
@@ -442,18 +453,19 @@ A função de custo global não pode considerar todas as nets equivalentes.
 
 Congestion deve existir por layer e por região.
 
-Conceitos possíveis:
+Conceitos:
 
 ```text
 available capacity
 reserved capacity
 committed tracks
+historical congestion cost
 via density
 pin escape demand
 critical corridor occupancy
 ```
 
-O modelo inicial pode ser grid-based como view derivada, enquanto a geometria final permanece contínua.
+O modelo inicial usa resource grid como view derivada, enquanto a geometria final permanece contínua.
 
 ## 19. Score multiobjetivo
 
@@ -461,21 +473,23 @@ Exemplo conceitual:
 
 ```text
 Score =
-  weighted_wirelength
-+ congestion_penalty
-+ via_cost
-+ critical_loop_cost
-+ EMI_proxy_cost
-+ crosstalk_proxy_cost
-+ thermal_proxy_cost
+  normalized weighted_wirelength
++ normalized congestion_penalty
++ normalized via_cost
++ normalized critical_loop_cost
++ normalized EMI_proxy_cost
++ normalized crosstalk_proxy_cost
++ normalized thermal_proxy_cost
 + preference_violations
 + manufacturing_cost_preferences
-- spare_routing_capacity_bonus
+- normalized spare_routing_capacity_bonus
 ```
 
 Required violations ficam fora do score normal: tornam o state inválido.
 
 A UI deve conseguir decompor o score por categoria.
+
+A normalização concreta é benchmark-gated e registrada no run metadata.
 
 ## 20. Trade-offs explícitos
 
@@ -653,19 +667,30 @@ Somente após acumular runs suficientes faz sentido considerar modelos que apren
 
 - quais neighborhoods normalmente produzem melhoria;
 - quais moves têm alta probabilidade de sucesso;
-- estimativa de routability;
-- ranking de candidatos;
-- escolha de routing order;
-- congestion prediction.
+- quais candidates tendem a routing failure;
+- quais net orderings reduzem congestionamento;
+- quais placements resultam em menor custo final.
 
-O dataset pode ser produzido pelo próprio sistema:
+Isso pode produzir:
+
+- learned candidate ranker;
+- routability predictor;
+- move proposal model;
+- failure classifier.
+
+Esses modelos continuam subordinados ao evaluator determinístico.
+
+## 30. Princípio final
+
+O optimizer não deve tentar substituir décadas de teoria de CAD/EDA por chamadas de LLM.
+
+A direção é:
 
 ```text
-state
-proposed action
-measured outcome
-regressions
-final acceptance
+classical geometry/search/routing
++ multi-fidelity evaluation
++ transactional joint optimization
++ semantic reasoning at macro decision points
 ```
 
-Isso permite aprendizado futuro sem exigir que o produto nasça dependente de treinamento próprio.
+A IA melhora **o que explorar, como interpretar e quando reparar**; o engine local continua responsável por **como executar e validar fisicamente**.
