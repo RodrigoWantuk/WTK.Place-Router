@@ -8,14 +8,16 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 
 - Placement e routing são tratados como um único problema físico codependente, não como duas etapas independentes.
 - A IA não é a autoridade de validade da PCB; regras, geometria, DRC e métricas determinísticas são a fonte de verdade.
-- O estado físico completo da placa fica fora do prompt. O agente consulta views estruturadas do `PhysicalDesignState` e propõe ações tipadas; somente o engine pode aplicá-las.
-- Cada alteração relevante é representável como `PhysicalDesignTransaction`, avaliada por regressão e aceita, reparada ou revertida.
+- O estado físico canônico (`PhysicalDesignState`) fica fora do prompt. O agente consulta views estruturadas e propõe ações através de contracts tipados.
+- Cada alteração relevante pode ser tratada como uma transação, avaliada por regressão e aceita, reparada ou revertida.
 - Hard constraints nunca são transformadas apenas em penalidades de score: uma solução inválida continua inválida.
 - O usuário deve conseguir expressar intenção elétrica e física visualmente, sem editar arquivos de regras manualmente.
 - O primeiro objetivo é demonstrar um ciclo autônomo completo e verificável em placas pequenas/médias, não substituir um layout engineer em qualquer classe de PCB desde a primeira versão.
-- A interface é desktop-first, com arquitetura C# + Avalonia + MVVM e workspace no estilo IDE/CAD, mantendo o physical-design engine headless e independente da UI.
-- Interações com IA são operações tipadas e versionadas: preamble conciso + contexto JSON mínimo + response contract estrito; a IA permanece fora do inner loop numérico e toda proposta é validada antes de alterar o estado.
-- DeepSeek é o provider inicial de IA, com `deepseek-v4-flash` como modelo default da primeira integração, sempre atrás de uma abstração provider-agnostic.
+- A interface é desktop-first, com C#/.NET + Avalonia + MVVM na Presentation Layer e workspace no estilo IDE/CAD, mantendo o physical-design engine headless e independente da UI.
+- Interações com IA são operações tipadas e versionadas: preamble conciso + contexto JSON mínimo + response contract estrito; a IA permanece fora do inner loop numérico e toda proposta é validada pelo engine antes de alterar o estado.
+- DeepSeek é o provider inicial de IA, através de uma abstração provider-agnostic; credenciais e secrets não pertencem ao PRDX/design.
+- O processamento local deve preferir teoria consolidada e bibliotecas maduras antes de algoritmos custom: geometry/indexing determinísticos, LNS + Simulated Annealing para placement, global routing por capacidade/congestionamento e detailed routing baseado em graph search/rip-up-reroute.
+- A UX segue a regra **importar/derivar/inferir antes de perguntar**: o usuário só deve ser interrompido por dados desconhecidos que sejam materialmente necessários para a decisão atual.
 
 ## Documentação inicial
 
@@ -28,13 +30,15 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 7. [Roadmap técnico, experimento inicial e critérios de sucesso](docs/06-Roadmap-e-Criterios-de-Sucesso.md)
 8. [Arquitetura da interface desktop, docking e workspaces](docs/07-Arquitetura-da-Interface.md)
 9. [Protocolo de iterações com IA e fronteira determinística](docs/08-Protocolo-de-Iteracoes-com-IA.md)
-10. [Decisões arquiteturais atuais e terminologia canônica](docs/09-Decisoes-Arquiteturais-e-Terminologia.md)
+10. [Decisões arquiteturais e terminologia](docs/09-Decisoes-Arquiteturais-e-Terminologia.md)
+11. [Processamento local e algoritmos determinísticos](docs/10-Processamento-Local-e-Algoritmos-Deterministicos.md)
 
-## Architecture Decision Records
+## ADRs
 
 - [ADR-0001 — DeepSeek como provider inicial de IA](docs/adr/0001-DeepSeek-como-Provider-Inicial.md)
 - [ADR-0002 — Stack desktop e fronteiras arquiteturais](docs/adr/0002-Stack-Desktop-e-Fronteiras-Arquiteturais.md)
+- [ADR-0003 — Processamento local e estratégia algorítmica](docs/adr/0003-Processamento-Local-e-Estrategia-Algoritmica.md)
 
 ## Estado
 
-A documentação atual é um **plano conceitual inicial**. Ela registra decisões, hipóteses e direções de arquitetura discutidas antes do início da implementação. Itens ainda não validados experimentalmente devem ser tratados como hipóteses de engenharia, não como garantias de produto.
+A documentação atual é um **plano conceitual e arquitetural em consolidação**. Ela registra decisões, hipóteses, contracts conceituais e direções de implementação discutidas antes do início do código principal. Itens marcados como candidatos/benchmark-gated devem ser validados experimentalmente antes de serem tratados como escolha final de implementação.
