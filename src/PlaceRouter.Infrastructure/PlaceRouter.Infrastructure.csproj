@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PlaceRouter.Core\PlaceRouter.Core.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Domain\PlaceRouter.Domain.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Application\PlaceRouter.Application.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
