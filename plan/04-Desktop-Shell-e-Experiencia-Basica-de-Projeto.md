@@ -18,7 +18,9 @@ Antes de codificar:
 3. confirme PLAN-01/03 funcionais no branch;
 4. leia este plano inteiro;
 5. leia a arquitetura de interface e os contracts de projeto;
-6. execute o fluxo completo create/open/import/save/view/inspect.
+6. **inspecione o repositório de referência `WTK.MediaForge`: https://github.com/RodrigoWantuk/WTK.MediaForge**;
+7. use o MediaForge como referência concreta para configuração correta de Avalonia, composição do `MainWindow`, MVVM/view resolution, `Dock.Avalonia`, painéis dockáveis/flutuantes e persistência/restauração de layout;
+8. execute o fluxo completo create/open/import/save/view/inspect.
 
 ### Documentos obrigatórios
 
@@ -28,6 +30,70 @@ Antes de codificar:
 - `docs/11-Formato-de-Projeto-Persistencia-Lifecycle-e-Exportacao.md`
 - `docs/adr/0002-Stack-Desktop-e-Fronteiras-Arquiteturais.md`
 - PLAN-01 e PLAN-03
+- repositório de referência: `https://github.com/RodrigoWantuk/WTK.MediaForge`
+
+### Regra de referência ao MediaForge
+
+O agente **pode e deve se basear diretamente** no WTK.MediaForge para evitar reinventar a infraestrutura Avalonia/docking que já foi validada em outro projeto do mesmo autor.
+
+Inspecionar especialmente os equivalentes existentes no MediaForge de:
+
+```text
+Directory.Packages.props / package versions
+Studio/Desktop .csproj
+App.axaml / DataTemplates
+MainWindow.axaml
+MainWindow code-behind restrito a concerns de Window/native
+Dock Factory
+Dock layout/state models
+layout persistence service/document
+floating window restoration
+monitor-safe bounds handling
+shell ViewModel composition
+ToolDock versus DocumentDock
+DataTemplate resolution de Context ViewModel → View
+```
+
+O objetivo é **reutilizar padrões e configuração comprovados**, incluindo:
+
+- bootstrap correto do Avalonia;
+- compiled bindings quando apropriado;
+- custom title bar;
+- `DockControl` como workspace central;
+- `Dock.Avalonia` / `Dock.Model.Mvvm` e packages auxiliares compatíveis;
+- panels realmente destacáveis em janelas independentes;
+- `OwnerMode=None`/equivalente quando necessário para floating windows independentes;
+- `ShowInTaskbar=true`/equivalente para painéis destacados apropriados;
+- persistência de posição/tamanho/monitor dos floating docks;
+- recuperação segura quando um monitor previamente utilizado não existe mais;
+- DataTemplates para resolver Views a partir do `Context` dos Tool/Document dockables;
+- toolbar/statusbar fora do DockControl;
+- code-behind limitado a concerns de janela/visual/native que não pertencem ao ViewModel.
+
+### O que NÃO copiar do MediaForge
+
+O MediaForge é referência de infraestrutura desktop e UX shell, **não modelo de domínio do Place&Router**.
+
+Não copiar/acoplar:
+
+- conceitos de Scene/Layer/Source/Sink/Production específicos do MediaForge;
+- `StudioShellViewModel` como um monólito;
+- lógica específica de preview/video;
+- tipos de domínio do MediaForge;
+- namespaces/projetos MediaForge como dependência runtime.
+
+Adapte os patterns ao desenho documentado do Place&Router:
+
+```text
+Design Navigator
+Board Workspace
+Constraint Composer
+Inspector
+Bottom Workbench
+Optimization/Review
+```
+
+Se houver divergência entre uma implementação histórica do MediaForge e a documentação/ADR vigente do Place&Router, **Place&Router prevalece**.
 
 ---
 
@@ -71,13 +137,15 @@ Fixar versões estáveis de:
 
 registrando-as centralmente.
 
+**Antes de escolher/configurar esses packages, comparar com a configuração funcional existente em `WTK.MediaForge`**. O agente pode atualizar versões se releases estáveis/suportadas mais adequadas existirem, mas deve preservar a combinação compatível entre Avalonia e a família Dock em vez de escolher versões independentes por tentativa.
+
 Não referenciar Avalonia a partir de Domain/Core/Application.
 
 ---
 
 ## 4. Shell e docking
 
-Implementar shell baseado na arquitetura documentada:
+Implementar shell baseado na arquitetura documentada e tomando o MediaForge como referência de implementação:
 
 ```text
 TitleBar
@@ -105,7 +173,35 @@ Nesta fase Constraint Composer pode estar em estado funcional reduzido/placehold
 - restore deve ser seguro em monitor desconectado;
 - toolbar/statusbar ficam fora da estrutura docking conforme docs.
 
-Reusar patterns validados em MediaForge apenas conceitualmente/por código permitido disponível no repo, sem criar dependência entre projetos.
+### Referência obrigatória de docking
+
+Antes de implementar Dock Factory/layout do zero, o agente deve inspecionar no MediaForge os arquivos/classes equivalentes a:
+
+```text
+MainWindow.axaml
+StudioDockFactory
+StudioDockLayoutState
+StudioLayoutDocument
+StudioLayoutService
+StudioShellViewModel
+```
+
+A nomenclatura/localização pode ter mudado no MediaForge; encontrar os equivalentes atuais no repositório.
+
+Usar como referência concreta para:
+
+- criação de RootDock/ProportionalDock/ToolDock/DocumentDock;
+- splitters e proportions;
+- `CanClose`, `CanFloat`, `CanPin`, `CanDrag`, `CanDrop`;
+- floating real de Tool panels;
+- managed window layer;
+- restaurar floating windows;
+- monitor ID e bounds;
+- evitar docks duplicados no restore;
+- clamp de janelas fora da área visível;
+- persistência de layout.
+
+Reutilizar/adaptar código somente quando juridicamente e arquiteturalmente apropriado por ser repositório do mesmo projeto/autor; ainda assim, renomear e remodelar para o domínio Place&Router e manter boundaries próprias.
 
 ---
 
@@ -123,6 +219,8 @@ Persistir estado de UI separado do PRDX:
 Não persistir constraints/design state em workspace settings.
 
 Restore deve clamp floating windows para telas disponíveis.
+
+**Basear a estratégia de persistência/restauração e os casos de monitor desconectado na implementação equivalente do WTK.MediaForge**, corrigindo/adaptando onde necessário em vez de redesenhar sem referência.
 
 ---
 
@@ -146,6 +244,8 @@ StatusBarViewModel
 Não concentrar toda lógica em um `ShellViewModel` gigantesco.
 
 ViewModels chamam Application services; não chamam ZipArchive/DSN parser/geometry library diretamente.
+
+Para view resolution/docking Context, observar o padrão MediaForge de Tool/Document carregar um `Context` ViewModel e Avalonia DataTemplates resolverem a View. Preferir esse padrão ao Dock model construir Views diretamente.
 
 ---
 
@@ -192,6 +292,8 @@ Nesta fase:
 - badges simples para missing/warning/locked.
 
 Não criar uma VM por primitive de board; listas/navigator podem usar VMs de linha quando apropriado.
+
+O Project Explorer do MediaForge pode ser usado como referência de UX para tabs internas, busca, contextual add/list/card patterns e AutomationIds, adaptando os conceitos para Components/Nets/Groups/Rules.
 
 ---
 
@@ -243,6 +345,8 @@ Renderizar a partir de snapshot/read model, não de milhares de Avalonia Control
 
 Ainda não implementar move/route edit; isso entra no PLAN-09.
 
+O PreviewWorkspace/Canvas do MediaForge pode servir de referência para composição do workspace e separação View/ViewModel, mas **não copiar sua lógica de vídeo/rendering**. O renderer de PCB é próprio.
+
 ---
 
 ## 11. Inspector básico
@@ -274,6 +378,8 @@ Net:
 
 Edição avançada fica para PLAN-05/09.
 
+O padrão `InspectorHost` + página contextual do MediaForge deve ser usado como referência em vez de criar um inspector monolítico com condicionais espalhadas.
+
 ---
 
 ## 12. Bottom Workbench básico
@@ -297,6 +403,8 @@ Nesta fase pelo menos:
 - demais tabs podem mostrar estado `Not available until optimizer/router is present`, mas não devem conter dados inventados.
 
 Click em Finding deve selecionar/focar entidade quando possível.
+
+O Bottom Workbench do MediaForge pode ser usado como referência para um único ToolDock com tabs internas em vez de proliferar painéis independentes sem necessidade.
 
 ---
 
@@ -334,6 +442,8 @@ Load/import/save devem rodar sem travar desnecessariamente a UI quando operaçã
 
 Adicionar `AutomationId` estável nos principais comandos/painéis para permitir smoke visual futuro.
 
+Seguir o padrão de identifiers/visual QA do MediaForge quando aplicável.
+
 Não investir em sistema completo de UI automation neste plano.
 
 ---
@@ -347,6 +457,8 @@ Priorizar:
 3. layout restore clampa floating window de monitor inexistente;
 4. basic viewport transform/hit-test em funções extraíveis determinísticas;
 5. smoke manual/documentado: import DSN → UI → save → reopen.
+
+Ao implementar layout persistence, aproveitar como referência os testes existentes do MediaForge para disconnected monitor, bounds inválidos e duplicate ToolId, adaptando o conjunto mínimo de alto valor.
 
 Não gastar o plano tentando testar pixel a pixel toda a UI.
 
@@ -370,6 +482,7 @@ Plano concluído quando:
 
 - aplicação desktop inicia;
 - docking shell funciona e persiste;
+- floating panels funcionam como janelas reais e restauram com segurança;
 - DSN pode ser importado através da UI;
 - PRDX pode ser aberto/salvo/reaberto;
 - board é renderizado a partir do estado real;
@@ -387,10 +500,12 @@ Em uma sessão limpa:
 Launch
 → Import sample.dsn
 → Board visible
+→ detach Inspector to floating window
 → select U1 in Navigator
 → U1 highlighted + Inspector populated
 → Save sample.prdx
-→ close/reopen
+→ close/reopen application
+→ workspace safely restored
 → same component/net/board counts and placement shown
 ```
 
@@ -398,4 +513,13 @@ Launch
 
 ## 19. Relatório final
 
-Informar stack/versions de UI, estrutura de docks entregue, project flow demonstrado, viewport capabilities, selection integration e validações executadas.
+Informar:
+
+- quais arquivos/padrões do WTK.MediaForge foram usados como referência;
+- stack/versions de UI escolhidos e diferenças em relação ao MediaForge;
+- estrutura de docks entregue;
+- floating/layout persistence entregue;
+- project flow demonstrado;
+- viewport capabilities;
+- selection integration;
+- validações executadas.
