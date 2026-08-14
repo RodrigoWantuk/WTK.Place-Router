@@ -354,7 +354,27 @@ Um provider local/offline futuro deve poder substituir DeepSeek sem alterar Doma
 
 ---
 
-## 12. Interoperabilidade
+## 12. Licenciamento de dependências algorítmicas
+
+### Accepted
+
+Separar explicitamente:
+
+```text
+incorporated library
+algorithmic/reference material
+external benchmark
+```
+
+Toda biblioteca incorporada passa por verificação de licença, versão, boundary arquitetural e testes próprios.
+
+Ferramentas com licença incompatível podem permanecer como referência teórica/comportamental ou benchmark externo, sem incorporação de código.
+
+Detalhes no ADR-0004.
+
+---
+
+## 13. Interoperabilidade
 
 ### Accepted
 
@@ -370,7 +390,7 @@ O formato exato PRDX v0.1 ainda precisa de JSON Schema formal.
 
 ---
 
-## 13. Joint placement/routing
+## 14. Joint placement/routing
 
 ### Accepted
 
@@ -384,7 +404,7 @@ A abstração superior trabalha sobre o mesmo `PhysicalDesignState`.
 
 ---
 
-## 14. Validade versus qualidade
+## 15. Validade versus qualidade
 
 ### Accepted
 
@@ -398,7 +418,7 @@ Nenhum score positivo compensa uma Required violation.
 
 ---
 
-## 15. Roadmap como dependências, não waterfall rígido
+## 16. Roadmap como dependências, não waterfall rígido
 
 ### Accepted
 
@@ -423,7 +443,7 @@ antes de o optimizer final existir, mas não deve substituir engine capabilities
 
 ---
 
-## 16. Open decisions
+## 17. Open decisions
 
 Ainda propositalmente abertas:
 
@@ -440,10 +460,11 @@ Ainda propositalmente abertas:
 
 ---
 
-## 17. ADRs
+## 18. ADRs
 
 - `ADR-0001` — DeepSeek como provider inicial;
 - `ADR-0002` — Stack desktop e fronteiras arquiteturais;
-- `ADR-0003` — Processamento local e estratégia algorítmica.
+- `ADR-0003` — Processamento local e estratégia algorítmica;
+- `ADR-0004` — Gate de licenciamento para dependências algorítmicas.
 
 Novas decisões concretas que alterem architecture/invariants devem ganhar ADR próprio em vez de ficarem somente em conversa ou comentários de código.
