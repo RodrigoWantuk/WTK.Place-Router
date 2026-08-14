@@ -18,6 +18,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - DeepSeek é o provider inicial de IA, através de uma abstração provider-agnostic; credenciais e secrets não pertencem ao PRDX/design.
 - O processamento local deve preferir teoria consolidada e bibliotecas maduras antes de algoritmos custom: geometry/indexing determinísticos, LNS + Simulated Annealing para placement, global routing por capacidade/congestionamento e detailed routing baseado em graph search/rip-up-reroute.
 - A UX segue a regra **importar/derivar/inferir antes de perguntar**: o usuário só deve ser interrompido por dados desconhecidos que sejam materialmente necessários para a decisão atual.
+- Biblioteca incorporada, referência algorítmica e benchmark externo são categorias distintas; dependências de terceiros passam por gate explícito de licenciamento.
 
 ## Documentação inicial
 
@@ -38,6 +39,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - [ADR-0001 — DeepSeek como provider inicial de IA](docs/adr/0001-DeepSeek-como-Provider-Inicial.md)
 - [ADR-0002 — Stack desktop e fronteiras arquiteturais](docs/adr/0002-Stack-Desktop-e-Fronteiras-Arquiteturais.md)
 - [ADR-0003 — Processamento local e estratégia algorítmica](docs/adr/0003-Processamento-Local-e-Estrategia-Algoritmica.md)
+- [ADR-0004 — Gate de licenciamento para dependências algorítmicas](docs/adr/0004-Licenciamento-de-Dependencias-Algoritmicas.md)
 
 ## Estado
 
