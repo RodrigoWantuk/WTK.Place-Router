@@ -15,7 +15,7 @@ WTK.Place&Router é uma ferramenta de **PCB physical design** cujo objetivo é a
 
 A tese central do projeto é que **placement e routing não devem ser tratados como duas decisões independentes em cascata**. Uma posição aparentemente ótima para um componente pode inviabilizar rotas futuras, aumentar congestionamento, piorar retorno de corrente, criar acoplamento indesejado ou obrigar o uso de vias e desvios. Da mesma forma, dificuldades encontradas durante routing podem justificar mover, rotacionar ou reorganizar componentes que já haviam sido considerados posicionados.
 
-Portanto, o objeto de otimização é o **estado físico completo da PCB**.
+Portanto, o objeto de otimização é o **estado físico completo da PCB**, representado pelo `PhysicalDesignState`.
 
 ## 2. O que o produto não pretende fazer inicialmente
 
@@ -53,6 +53,9 @@ Design Exchange Layer
 Modelo canônico Place&Router
     │
     ▼
+Automatic deterministic enrichment
+    │
+    ▼
 Constraint Workspace
     │
     ├── propriedades de componentes
@@ -83,6 +86,12 @@ Candidate PCB(s)
     ▼
 Export de volta ao EDA / formato de intercâmbio
 ```
+
+A UX deve obedecer a regra:
+
+> **importar, derivar e inferir antes de perguntar ao usuário**.
+
+Campos desconhecidos continuam válidos. O usuário só deve ser interrompido quando uma informação ausente for materialmente necessária para a decisão em andamento.
 
 ## 4. Por que placement e routing são um único problema
 
@@ -165,11 +174,13 @@ Board geometry
 
 Occupancy maps rasterizados podem ser usados como **view computacional**, mas não como representação canônica.
 
+A direção v0.1 usa coordenadas físicas inteiras e um geometry kernel determinístico; detalhes estão no documento `10`.
+
 ## 6. O papel da IA
 
 A primeira arquitetura não depende de treinamento de um modelo próprio.
 
-O sistema deve usar um **LLM generalista forte em reasoning e tool calling** como agente de engenharia e coordenação.
+O sistema usa um **LLM generalista com reasoning/structured output** como agente de engenharia e coordenação em macro-decisões.
 
 O LLM é responsável por tarefas como:
 
@@ -182,19 +193,20 @@ O LLM é responsável por tarefas como:
 - sugerir constraints;
 - revisar coerência semântica;
 - interpretar métricas;
-- propor reparos;
+- propor classes de reparo;
 - explicar decisões.
 
 O LLM **não deve** ser responsável por:
 
-- armazenar todo o BoardState no prompt;
+- armazenar todo o PhysicalDesignState no prompt;
 - calcular geometria exata como fonte de verdade;
 - declarar DRC válido;
 - decidir se uma distância física realmente atende uma regra;
 - desenhar uma PCB como imagem;
-- emitir milhares de coordenadas sem avaliação externa.
+- emitir milhares de coordenadas sem avaliação externa;
+- substituir A*/routing/search/DRC local conhecido.
 
-A placa é a memória do sistema. O agente consulta exatamente o contexto relevante através de tools.
+A placa é a memória do sistema. O agente consulta exatamente o contexto relevante através de operações estruturadas.
 
 ## 7. Três cérebros, não um
 
@@ -202,23 +214,23 @@ A arquitetura conceitual possui três classes de inteligência:
 
 ### 7.1 Reasoning Agent
 
-LLM generalista com tools e structured output.
+LLM generalista com structured input/output.
 
 Responsável por estratégia, decomposição, diagnóstico, semântica, revisão e explicação.
 
+DeepSeek é o provider inicial, sem acoplamento arquitetural ao fornecedor.
+
 ### 7.2 Search / Optimization Engine
 
-Inicialmente pode ser totalmente não neural.
+Inicialmente totalmente local e não neural.
 
-Candidatos considerados:
+Direção v0.1:
 
 - Large Neighborhood Search (LNS);
 - Simulated Annealing;
-- beam search;
 - heurísticas locais;
-- otimização contínua/discreta especializada;
-- futuramente MCTS;
-- eventualmente learned heuristics quando existir dataset próprio.
+- candidate funnel multi-fidelity;
+- futuramente beam/MCTS/learned heuristics quando benchmarks justificarem.
 
 Responsável por explorar muitas combinações geométricas que não fazem sentido serem decididas uma a uma pelo LLM.
 
@@ -238,8 +250,11 @@ Responsável por:
 - length/skew;
 - manufacturability;
 - routability e congestionamento;
+- global/detailed routing;
 - métricas elétricas determinísticas ou aproximadas;
 - validação de hard constraints.
+
+A direção dos algoritmos locais está detalhada em `10-Processamento-Local-e-Algoritmos-Deterministicos.md`.
 
 ## 8. Princípio de autoridade
 
@@ -349,6 +364,8 @@ A ontologia deve permitir objetos/semânticas como:
 - FeedbackNetwork;
 - DecouplingRelationship.
 
+Antes da IA, heurísticas locais podem gerar **candidates** a partir de nomes/topologia. Inferências incertas mantêm provenance/confidence e não viram hard facts silenciosamente.
+
 ## 11. Pads importam tanto quanto componentes
 
 O sistema não pode reduzir o problema a um grafo em que cada componente é apenas um ponto.
@@ -415,7 +432,7 @@ Explicabilidade não é apenas UI. Ela é importante para:
 
 ## 14. Contexto de mercado e posicionamento conceitual
 
-A ideia não surge em um vazio. Ferramentas e pesquisas modernas de EDA já exploram IA, reinforcement learning, generative design, auto-layout, placement e routing. Entre os nomes discutidos como referências de mercado/pesquisa estão Cadence Allegro X AI, Quilter, Flux e iniciativas de DeepPCB/Deep RL.
+A ideia não surge em um vazio. Ferramentas e pesquisas modernas de EDA já exploram automação, optimization, IA, reinforcement learning, placement e routing.
 
 O objetivo do projeto não é provar que automação de PCB é possível. A diferenciação conceitual pretendida é combinar:
 
@@ -423,9 +440,10 @@ O objetivo do projeto não é provar que automação de PCB é possível. A dife
 - constraint authoring explícito e visual;
 - estado externo determinístico;
 - joint placement/routing optimization;
+- uso de teoria clássica/local antes de cloud reasoning;
 - review e regressão contínuos;
 - explainability;
-- possibilidade de operação local-first no futuro;
+- possibilidade de operação local/offline parcial ou total conforme provider/configuração;
 - memória de engenharia construída com resultados próprios.
 
 Esse posicionamento ainda é uma hipótese de produto e não uma decisão comercial final.
@@ -434,11 +452,11 @@ Esse posicionamento ainda é uma hipótese de produto e não uma decisão comerc
 
 1. O circuito eletrônico é criado fora do Place&Router na primeira fase.
 2. Placement e routing são codependentes.
-3. A fonte de verdade física é determinística.
+3. A fonte de verdade física é determinística e local.
 4. Hard constraints não são meras penalidades.
-5. O BoardState não depende da memória do LLM.
-6. O LLM age através de tools.
-7. O optimizer explora coordenadas; o LLM não precisa escolher números exatos.
+5. O PhysicalDesignState não depende da memória do LLM.
+6. A IA age através de AgentOperations/contracts estruturados.
+7. O optimizer local explora coordenadas; o LLM não precisa escolher números exatos.
 8. Routing pode solicitar mudanças de placement.
 9. Placement deve considerar routing futuro desde cedo.
 10. Mudanças relevantes devem ser revisáveis, comparáveis e reversíveis.
@@ -446,4 +464,6 @@ Esse posicionamento ainda é uma hipótese de produto e não uma decisão comerc
 12. A interface deve permitir configurar constraints complexas visualmente.
 13. Informações desconhecidas são permitidas e devem ser explicitamente marcadas como desconhecidas.
 14. Sugestões da IA devem ser distinguíveis de regras definidas pelo usuário.
-15. O primeiro marco técnico é provar o ciclo autônomo completo em casos controlados.
+15. O sistema deve importar/derivar/inferir antes de pedir input manual.
+16. Algoritmos clássicos/bibliotecas maduras são preferidos a soluções custom ou LLM para problemas já bem definidos.
+17. O primeiro marco técnico é provar o ciclo autônomo completo em casos controlados.
