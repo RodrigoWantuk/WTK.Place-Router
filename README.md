@@ -13,6 +13,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 - Hard constraints nunca são transformadas apenas em penalidades de score: uma solução inválida continua inválida.
 - O usuário deve conseguir expressar intenção elétrica e física visualmente, sem editar arquivos de regras manualmente.
 - O primeiro objetivo é demonstrar um ciclo autônomo completo e verificável em placas pequenas/médias, não substituir um layout engineer em qualquer classe de PCB desde a primeira versão.
+- A interface é desktop-first, com arquitetura Avalonia + MVVM e workspace no estilo IDE/CAD, mantendo o physical-design engine headless e independente da UI.
 
 ## Documentação inicial
 
@@ -23,6 +24,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 5. [Physical Design Optimizer: placement + routing conjuntos](docs/04-Physical-Design-Optimizer.md)
 6. [Agente de IA, revisão, memória e explainability](docs/05-Agente-IA-Revisao-e-Memoria.md)
 7. [Roadmap técnico, experimento inicial e critérios de sucesso](docs/06-Roadmap-e-Criterios-de-Sucesso.md)
+8. [Arquitetura da interface desktop, docking e workspaces](docs/07-Arquitetura-da-Interface.md)
 
 ## Estado
 
