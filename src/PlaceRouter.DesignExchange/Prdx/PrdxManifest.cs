@@ -11,7 +11,9 @@ public sealed record PrdxManifest(
     string ModifiedAt,
     string? ApplicationVersion,
     string CanonicalPayload,
-    string PayloadSha256)
+    string PayloadSha256,
+    IReadOnlyList<string>? FeatureFlags = null,
+    IReadOnlyList<ManifestSourceFingerprint>? SourceFingerprints = null)
 {
     public const string ExpectedFormat = "WTK.PRDX";
     public const string CurrentFormatVersion = "0.1.0";
@@ -29,7 +31,35 @@ public sealed record PrdxManifest(
         ["applicationVersion"] = ApplicationVersion,
         ["canonicalPayload"] = CanonicalPayload,
         ["payloadSha256"] = PayloadSha256,
-        ["featureFlags"] = new JsonArray(),
-        ["sourceFingerprints"] = new JsonArray()
+        ["featureFlags"] = ToArray(FeatureFlags ?? []),
+        ["sourceFingerprints"] = ToArray(SourceFingerprints ?? [], f => new JsonObject
+        {
+            ["sourceImportId"] = f.SourceImportId,
+            ["sha256"] = f.Sha256
+        })
     };
+
+    private static JsonArray ToArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values.Order(StringComparer.Ordinal))
+        {
+            array.Add(value);
+        }
+
+        return array;
+    }
+
+    private static JsonArray ToArray<T>(IEnumerable<T> values, Func<T, JsonNode?> map)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+        {
+            array.Add(map(value));
+        }
+
+        return array;
+    }
 }
+
+public sealed record ManifestSourceFingerprint(string SourceImportId, string Sha256);

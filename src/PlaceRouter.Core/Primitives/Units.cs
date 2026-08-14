@@ -19,6 +19,13 @@ public readonly record struct AngleDegrees(decimal Value)
     public override string ToString() => FormattableString.Invariant($"{Value} deg");
 }
 
+public readonly record struct Point2(LengthUnits X, LengthUnits Y);
+
+public sealed record Polygon2(IReadOnlyList<Point2> Outer, IReadOnlyList<IReadOnlyList<Point2>> Holes)
+{
+    public static Polygon2 Empty { get; } = new([], []);
+}
+
 public enum KnowledgeStatus
 {
     Known,

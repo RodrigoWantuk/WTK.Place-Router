@@ -1,18 +1,18 @@
-using PlaceRouter.Domain.Prdx;
+using PlaceRouter.Domain.Model;
 
 namespace PlaceRouter.Application.Projects;
 
 public sealed class ProjectService(
-    IPrdxProjectReader reader,
-    IPrdxProjectWriter writer,
+    IProjectStore store,
     ICanonicalProjectValidator validator)
 {
-    public CanonicalProject CreateProject(string name) => CanonicalProjectFactory.CreateEmpty(name);
+    public ProjectDocument CreateProject(string name) =>
+        ProjectDocument.New(CanonicalProjectFactory.CreateIncomplete(name));
 
-    public ProjectLoadResult LoadProject(string path) => reader.Load(path);
+    public ProjectLoadResult LoadProject(string path) => store.Load(path);
 
-    public ProjectSaveResult SaveProject(CanonicalProject project, string path, PrdxWriteOptions? options = null) =>
-        writer.Save(project, path, options);
+    public ProjectSaveResult SaveProject(ProjectDocument document, string path) =>
+        store.Save(document, path);
 
     public ProjectValidationResult ValidateProject(CanonicalProject project) => validator.Validate(project);
 }

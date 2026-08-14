@@ -45,6 +45,7 @@ Ferramentas podem ser executadas externamente para comparar resultados sem se to
 - NetTopologySuite: candidate; confirmar licença/versão no bootstrap antes de incorporar.
 - Google OR-Tools: optional candidate; confirmar licença/versão no bootstrap antes de incorporar.
 - Freerouting: benchmark/reference only por default; o repositório consultado declara GPL-3.0, portanto seu código não deve ser incorporado sem decisão explícita de licenciamento.
+- NJsonSchema 11.6.1: incorporated library para validação JSON Schema no boundary PRDX; licença MIT; versão pinada em `Directory.Packages.props`; isolada atrás de `IPrdxSchemaValidator` para permitir substituição caso o subset Draft 2020-12 exigido deixe de ser atendido.
 
 ## Consequência
 

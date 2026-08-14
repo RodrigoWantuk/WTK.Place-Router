@@ -79,6 +79,16 @@ optional feature flags
 
 Ele permite identificar versão e integridade antes de desserializar o projeto completo.
 
+No runtime v0.1, a política de versão é fechada:
+
+```text
+formatVersion suportado = 0.1.0
+schemaVersion suportado = 0.1.0
+featureFlags suportadas = nenhuma
+```
+
+Arquivos fora dessa política falham com diagnostics tipados (`PRDX-VERSION-UNSUPPORTED` ou `PRDX-FEATURE-UNSUPPORTED`) em vez de serem abertos por tentativa silenciosa.
+
 ### 3.2 `project.json`
 
 É a fonte canônica persistente do projeto.
@@ -276,6 +286,8 @@ nunca:
 1,25
 ```
 
+No código de domínio, coordenadas físicas usam tipos explícitos como `LengthUnits`, `Point2` e `Polygon2`. O payload PRDX continua serializando inteiros canônicos, mas Domain/Application não devem expor APIs públicas baseadas em pares `long x/y` sem semântica.
+
 ---
 
 ## 8. Provenance e conhecimento
@@ -397,6 +409,8 @@ UNPLACED
 
 A pose física não vive na definição lógica do componente; ela vive em `PhysicalDesignState.componentPoses`.
 
+Enquanto o import ainda não resolveu footprint, `footprintId` pode permanecer `null`. Isso representa desconhecimento material preservado, não fallback para um footprint fictício.
+
 ---
 
 ## 11. Footprints e pads
@@ -475,6 +489,8 @@ Netlist
 
 Uma net multi-terminal continua sendo naturalmente um hyperedge.
 
+Quando o mapping físico ainda não existe, endpoints podem preservar a identidade lógica por `pinRef` com `padId = null`. Quando `padId` existe, o integrity validator confirma que o pad pertence ao footprint do componente. Endpoint sem pad resolvido pode gerar `PRDX-PAD-MAPPING-UNRESOLVED` não bloqueante.
+
 Electrical properties podem incluir:
 
 ```text
@@ -549,6 +565,8 @@ fixed mechanical objects
 ```
 
 Board outline e outras geometrias usam paths/polygons em unidades canônicas.
+
+Projetos recém-criados ou importações parciais podem ter `outline = null`, `layers = []` e `stackup = []`. O sistema não cria placa 10 x 10 mm nem layers de cobre falsas para satisfazer schema.
 
 ---
 
@@ -735,6 +753,7 @@ manual edit metadata
 Status:
 
 ```text
+INCOMPLETE
 VALID
 VALID_WITH_WARNINGS
 INVALID_REQUIRES_REVIEW
@@ -742,6 +761,8 @@ PARTIALLY_ROUTED
 UNROUTED
 STALE_DERIVED_ANALYSIS
 ```
+
+`INCOMPLETE` significa que a informação física necessária ainda não existe. `UNROUTED` fica reservado para projeto fisicamente conhecido, mas ainda sem rotas aceitas.
 
 Um estado editado manualmente pode temporariamente ser inválido e continuar sendo editável. O sistema abre findings e impede sign-off/export de fabricação quando houver violations bloqueantes.
 
@@ -1164,6 +1185,17 @@ write temporary archive
 ```
 
 Nunca escrever diretamente sobre o único arquivo válido e deixá-lo truncado em crash.
+
+O `ProjectDocument` carregado mantém `ProjectFileContext` com origem do container, feature flags, source fingerprints e entradas suplementares. Portanto:
+
+```text
+Open A.prdx
+→ Save As B.prdx
+```
+
+preserva por stream-copy entradas sob `source/`, `assets/` e `attachments/` a partir de `A.prdx`, sem depender de `B.prdx` já existir.
+
+`manifest.sourceFingerprints` é preservado/regenerado a partir de `SourceImport.sourceSha256`; o writer não zera fingerprints nem feature flags suportadas. A serialização usa UTF-8 sem BOM e newline consistente para manter hash determinístico quando o domínio não muda.
 
 ---
 

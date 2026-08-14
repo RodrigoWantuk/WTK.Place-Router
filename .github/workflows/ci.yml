@@ -6,12 +6,16 @@ on:
 
 jobs:
   build-test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
       - run: dotnet restore PlaceRouter.sln
       - run: dotnet build PlaceRouter.sln --configuration Release --no-restore
       - run: dotnet test PlaceRouter.sln --configuration Release --no-build

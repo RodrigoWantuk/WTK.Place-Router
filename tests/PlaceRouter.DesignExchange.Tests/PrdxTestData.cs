@@ -1,13 +1,15 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using PlaceRouter.DesignExchange.Prdx;
-using PlaceRouter.Domain.Prdx;
 
 namespace PlaceRouter.DesignExchange.Tests;
 
 internal static class PrdxTestData
 {
+    private static readonly UTF8Encoding Utf8 = new(false, true);
+
     public static string RepositoryRoot
     {
         get
@@ -22,27 +24,63 @@ internal static class PrdxTestData
         }
     }
 
-    public static string FixtureProjectJsonPath =>
+    public static string FullFixtureProjectJsonPath =>
         Path.Combine(RepositoryRoot, "schemas", "prdx", "0.1", "examples", "minimal-2layer.project.json");
 
-    public static CanonicalProject LoadFixtureProject() => CanonicalProject.Parse(File.ReadAllText(FixtureProjectJsonPath));
+    public static string IncompleteFixtureProjectJsonPath =>
+        Path.Combine(RepositoryRoot, "schemas", "prdx", "0.1", "examples", "incomplete-project.project.json");
 
-    public static string CreateFixturePrdx(string directory)
+    public static string FullProjectJson() => File.ReadAllText(FullFixtureProjectJsonPath);
+
+    public static string IncompleteProjectJson() => File.ReadAllText(IncompleteFixtureProjectJsonPath);
+
+    public static JsonObject FullProjectNode() => JsonNode.Parse(FullProjectJson())!.AsObject();
+
+    public static string CreateFixturePrdx(string directory, string? projectJson = null, Action<JsonObject>? mutateManifest = null, IEnumerable<(string Path, byte[] Bytes)>? extras = null)
     {
-        var project = LoadFixtureProject();
-        var path = Path.Combine(directory, "minimal-2layer.prdx");
-        var writer = new PrdxProjectWriter();
-        var save = writer.Save(project, path);
-        Assert.True(save.Success, string.Join(Environment.NewLine, save.Diagnostics.Select(d => d.Message)));
+        var json = projectJson ?? FullProjectJson();
+        var payloadBytes = Utf8.GetBytes(json);
+        var project = JsonNode.Parse(json)!.AsObject();
+        var metadata = project["metadata"]!.AsObject();
+        var path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".prdx");
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+
+        var fingerprints = (project["sourceImports"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Select(source => new ManifestSourceFingerprint(
+                source["id"]!.GetValue<string>(),
+                source["sourceSha256"]!.GetValue<string>()))
+            .ToArray();
+
+        var manifest = new PrdxManifest(
+            PrdxManifest.ExpectedFormat,
+            PrdxManifest.CurrentFormatVersion,
+            project["projectId"]!.GetValue<string>(),
+            project["projectRevision"]!.GetValue<long>(),
+            metadata["createdAt"]!.GetValue<string>(),
+            metadata["modifiedAt"]!.GetValue<string>(),
+            "test",
+            PrdxManifest.ProjectPayloadPath,
+            Sha256(payloadBytes),
+            [],
+            fingerprints).ToJsonObject();
+
+        mutateManifest?.Invoke(manifest);
+        WriteEntry(archive, PrdxManifest.ManifestPath, Utf8.GetBytes(manifest.ToJsonString(new() { WriteIndented = true }) + "\n"));
+        WriteEntry(archive, PrdxManifest.ProjectPayloadPath, payloadBytes);
+
+        foreach (var extra in extras ?? [])
+        {
+            WriteEntry(archive, extra.Path, extra.Bytes);
+        }
+
         return path;
     }
 
-    public static string CreatePrdxWithWrongHash(string directory)
+    public static string CreatePrdxWithProjectBytes(string directory, byte[] bytes, Action<JsonObject>? mutateManifest = null)
     {
-        var projectBytes = Encoding.UTF8.GetBytes(File.ReadAllText(FixtureProjectJsonPath));
-        var path = Path.Combine(directory, "wrong-hash.prdx");
+        var path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".prdx");
         using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
-
         var manifest = new PrdxManifest(
             PrdxManifest.ExpectedFormat,
             PrdxManifest.CurrentFormatVersion,
@@ -52,51 +90,42 @@ internal static class PrdxTestData
             "2026-08-14T19:00:00Z",
             "test",
             PrdxManifest.ProjectPayloadPath,
-            new string('0', 64));
-
-        WriteEntry(archive, PrdxManifest.ManifestPath, manifest.ToJsonObject().ToJsonString(new() { WriteIndented = true }));
-        WriteEntry(archive, PrdxManifest.ProjectPayloadPath, Encoding.UTF8.GetString(projectBytes));
+            Sha256(bytes)).ToJsonObject();
+        mutateManifest?.Invoke(manifest);
+        WriteEntry(archive, PrdxManifest.ManifestPath, Utf8.GetBytes(manifest.ToJsonString(new() { WriteIndented = true }) + "\n"));
+        WriteEntry(archive, PrdxManifest.ProjectPayloadPath, bytes);
         return path;
     }
 
-    public static string CreatePrdxWithBadManifestFormat(string directory)
-    {
-        var projectBytes = Encoding.UTF8.GetBytes(File.ReadAllText(FixtureProjectJsonPath));
-        var path = Path.Combine(directory, "bad-manifest-format.prdx");
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+    public static string Sha256(byte[] bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
-        var manifest = new PrdxManifest(
-            "BAD",
-            PrdxManifest.CurrentFormatVersion,
-            "prj_demo_001",
-            1,
-            "2026-08-14T19:00:00Z",
-            "2026-08-14T19:00:00Z",
-            "test",
-            PrdxManifest.ProjectPayloadPath,
-            Sha256ForTest(projectBytes));
-
-        WriteEntry(archive, PrdxManifest.ManifestPath, manifest.ToJsonObject().ToJsonString(new() { WriteIndented = true }));
-        WriteEntry(archive, PrdxManifest.ProjectPayloadPath, Encoding.UTF8.GetString(projectBytes));
-        return path;
-    }
-
-    public static CanonicalProject WithMissingPadReference()
-    {
-        var project = LoadFixtureProject().DeepClone();
-        var endpoint = project.Root["logicalDesign"]?["netlist"]?["nets"]?[0]?["endpoints"]?[0] as JsonObject
-            ?? throw new InvalidOperationException("Fixture endpoint not found.");
-        endpoint["padId"] = "pad_missing";
-        return project;
-    }
-
-    private static void WriteEntry(ZipArchive archive, string path, string text)
+    public static void WriteEntry(ZipArchive archive, string path, byte[] bytes)
     {
         var entry = archive.CreateEntry(path);
-        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        writer.Write(text);
+        using var stream = entry.Open();
+        stream.Write(bytes);
+    }
+}
+
+internal sealed class TempDirectory : IDisposable
+{
+    public TempDirectory()
+    {
+        Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "placerouter-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path);
     }
 
-    private static string Sha256ForTest(byte[] bytes) =>
-        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+    public string Path { get; }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(Path, recursive: true);
+        }
+        catch
+        {
+        }
+    }
 }

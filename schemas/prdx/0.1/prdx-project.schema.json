@@ -20,8 +20,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "type": "string",
-      "pattern": "^0\\.1\\.[0-9]+$"
+      "const": "0.1.0"
     },
     "projectId": {
       "$ref": "#/$defs/id"
@@ -246,7 +245,12 @@
         "value": {"type": ["string", "null"]},
         "partNumber": {"type": ["string", "null"]},
         "manufacturer": {"type": ["string", "null"]},
-        "footprintId": {"$ref": "#/$defs/id"},
+        "footprintId": {
+          "oneOf": [
+            {"$ref": "#/$defs/id"},
+            {"type": "null"}
+          ]
+        },
         "placementPolicy": {
           "enum": ["MOVABLE", "PRESERVE_PREFERRED", "LOCKED", "MECHANICAL_FIXED", "UNPLACED"]
         },
@@ -403,10 +407,30 @@
     "padEndpoint": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["componentId", "padId"],
+      "required": ["componentId"],
+      "anyOf": [
+        {
+          "properties": {
+            "padId": {"$ref": "#/$defs/id"}
+          },
+          "required": ["padId"]
+        },
+        {
+          "properties": {
+            "pinRef": {"type": "string", "minLength": 1}
+          },
+          "required": ["pinRef"]
+        }
+      ],
       "properties": {
         "componentId": {"$ref": "#/$defs/id"},
-        "padId": {"$ref": "#/$defs/id"}
+        "padId": {
+          "oneOf": [
+            {"$ref": "#/$defs/id"},
+            {"type": "null"}
+          ]
+        },
+        "pinRef": {"type": ["string", "null"], "minLength": 1}
       }
     },
     "netClass": {
@@ -459,7 +483,12 @@
       "required": ["origin", "outline", "layers", "stackup", "regions", "keepouts", "holes"],
       "properties": {
         "origin": {"$ref": "#/$defs/point"},
-        "outline": {"$ref": "#/$defs/polygon"},
+        "outline": {
+          "oneOf": [
+            {"$ref": "#/$defs/polygon"},
+            {"type": "null"}
+          ]
+        },
         "cutouts": {
           "type": "array",
           "items": {"$ref": "#/$defs/polygon"},
@@ -473,8 +502,7 @@
         "material": {"$ref": "#/$defs/sourcedValue"},
         "layers": {
           "type": "array",
-          "items": {"$ref": "#/$defs/layer"},
-          "minItems": 1
+          "items": {"$ref": "#/$defs/layer"}
         },
         "stackup": {
           "type": "array",
@@ -741,6 +769,7 @@
         "stateRevision": {"type": "integer", "minimum": 0},
         "status": {
           "enum": [
+            "INCOMPLETE",
             "VALID",
             "VALID_WITH_WARNINGS",
             "INVALID_REQUIRES_REVIEW",

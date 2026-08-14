@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "0.1.0",
+  "projectId": "prj_incomplete_001",
+  "projectRevision": 0,
+  "metadata": {
+    "name": "Incomplete Fixture",
+    "description": "Deliberately incomplete PRDX 0.1 project",
+    "createdAt": "2026-08-14T20:00:00Z",
+    "modifiedAt": "2026-08-14T20:00:00Z",
+    "author": null,
+    "tags": ["schema-fixture", "incomplete"]
+  },
+  "sourceImports": [],
+  "logicalDesign": {
+    "components": [
+      {
+        "id": "cmp_u1",
+        "referenceDesignator": "U1",
+        "value": "UNRESOLVED_IC",
+        "partNumber": null,
+        "manufacturer": null,
+        "footprintId": null,
+        "placementPolicy": "UNPLACED",
+        "properties": {},
+        "semanticRole": {
+          "value": null,
+          "unit": null,
+          "status": "UNKNOWN",
+          "confidence": null,
+          "provenance": {"kind": "UNKNOWN", "sourceRef": null, "model": null, "operation": null, "timestamp": null, "note": null}
+        },
+        "sourceMetadata": {},
+        "provenance": {"kind": "USER_DEFINED", "sourceRef": null, "model": null, "operation": null, "timestamp": null, "note": null}
+      }
+    ],
+    "footprints": [],
+    "netlist": {
+      "nets": [
+        {
+          "id": "net_1",
+          "name": "NET_1",
+          "endpoints": [
+            {"componentId": "cmp_u1", "pinRef": "24", "padId": null}
+          ],
+          "netClassId": null,
+          "electricalProperties": {},
+          "routingProperties": {},
+          "provenance": {"kind": "USER_DEFINED", "sourceRef": null, "model": null, "operation": null, "timestamp": null, "note": null}
+        }
+      ]
+    },
+    "netClasses": [],
+    "groups": []
+  },
+  "board": {
+    "origin": {"x": 0, "y": 0},
+    "outline": null,
+    "cutouts": [],
+    "holes": [],
+    "thicknessUnits": null,
+    "material": {
+      "value": null,
+      "unit": null,
+      "status": "UNKNOWN",
+      "confidence": null,
+      "provenance": {"kind": "UNKNOWN", "sourceRef": null, "model": null, "operation": null, "timestamp": null, "note": null}
+    },
+    "layers": [],
+    "stackup": [],
+    "regions": [],
+    "keepouts": []
+  },
+  "manufacturingProfile": {
+    "id": "mfg_unknown",
+    "name": "Unknown",
+    "profileVersion": "0",
+    "templateSource": null,
+    "lastValidatedAt": null,
+    "capabilities": {},
+    "provenance": {"kind": "UNKNOWN", "sourceRef": null, "model": null, "operation": null, "timestamp": null, "note": null}
+  },
+  "constraints": [],
+  "semantics": {"relationships": []},
+  "physicalDesignState": {
+    "stateId": "state_001",
+    "stateRevision": 0,
+    "status": "INCOMPLETE",
+    "basedOnProjectRevision": 0,
+    "componentPoses": [],
+    "routes": [],
+    "vias": [],
+    "copperZones": [],
+    "lastModifiedAt": "2026-08-14T20:00:00Z",
+    "lastModifiedBy": "fixture"
+  },
+  "reviewDecisions": [],
+  "projectSettings": {
+    "optimizationIntent": {},
+    "exportProfiles": [],
+    "sourceEmbeddingPolicy": "ASK"
+  },
+  "extensions": {}
+}

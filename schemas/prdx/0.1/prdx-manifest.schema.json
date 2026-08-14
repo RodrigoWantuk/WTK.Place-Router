@@ -19,8 +19,7 @@
       "const": "WTK.PRDX"
     },
     "formatVersion": {
-      "type": "string",
-      "pattern": "^0\\.1\\.[0-9]+$"
+      "const": "0.1.0"
     },
     "projectId": {
       "$ref": "#/$defs/id"

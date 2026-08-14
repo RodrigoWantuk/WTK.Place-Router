@@ -1,115 +1,136 @@
-using System.Text.Json.Nodes;
 using PlaceRouter.Application.Projects;
 using PlaceRouter.Core.Diagnostics;
-using PlaceRouter.Domain.Prdx;
+using PlaceRouter.Domain.Model;
 
 namespace PlaceRouter.DesignExchange.Prdx;
 
-public sealed class CanonicalIntegrityValidator(SchemaRegistry? schemaRegistry = null) : ICanonicalProjectValidator
+public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
 {
-    private readonly SchemaRegistry _schemaRegistry = schemaRegistry ?? new SchemaRegistry();
-
     public ProjectValidationResult Validate(CanonicalProject project)
     {
         var diagnostics = new List<Diagnostic>();
-        diagnostics.AddRange(_schemaRegistry.ValidateProject(project.Root));
-        if (diagnostics.Any(d => d.Blocking))
-        {
-            return new ProjectValidationResult(diagnostics);
-        }
+        var index = new ProjectIndex(project, diagnostics);
 
-        diagnostics.AddRange(ValidateIntegrity(project.Root));
+        ValidateSources(project, index, diagnostics);
+        ValidateComponents(project, index, diagnostics);
+        ValidateNets(project, index, diagnostics);
+        ValidateBoard(project, index, diagnostics);
+        ValidateGroups(project, index, diagnostics);
+        ValidatePhysicalState(project, index, diagnostics);
+
         return new ProjectValidationResult(diagnostics);
     }
 
-    public IReadOnlyList<Diagnostic> ValidateIntegrity(JsonObject root)
+    private static void ValidateSources(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
     {
-        var diagnostics = new List<Diagnostic>();
-        var index = new ProjectIndex(root, diagnostics);
-
-        ValidateComponents(root, index, diagnostics);
-        ValidateNets(root, index, diagnostics);
-        ValidateBoard(root, index, diagnostics);
-        ValidateConstraints(root, index, diagnostics);
-        ValidateSemantics(root, index, diagnostics);
-        ValidatePhysicalState(root, index, diagnostics);
-
-        return diagnostics;
+        foreach (var source in project.SourceImports)
+        {
+            if (source.EmbeddedPath is not null && !source.EmbeddedPath.StartsWith("source/", StringComparison.Ordinal))
+            {
+                diagnostics.Add(Diagnostic.Warning(
+                    DiagnosticCodes.SupplementaryMissing,
+                    "Integrity",
+                    $"Source import '{source.Id}' points outside the source/ supplementary area.",
+                    blocking: false));
+            }
+        }
     }
 
-    private static void ValidateComponents(JsonObject root, ProjectIndex index, List<Diagnostic> diagnostics)
+    private static void ValidateComponents(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
     {
-        foreach (var component in Objects(root["logicalDesign"]?["components"]))
+        foreach (var group in project.LogicalDesign.Components.GroupBy(c => c.ReferenceDesignator, StringComparer.OrdinalIgnoreCase))
         {
-            var componentId = RequiredId(component, "id");
-            var footprintId = component["footprintId"]?.GetValue<string>();
-            if (footprintId is not null && !index.Footprints.ContainsKey(footprintId))
+            if (!string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1)
             {
-                diagnostics.Add(RefNotFound("Component footprint does not exist.", "COMPONENT", componentId, "FOOTPRINT", footprintId));
+                diagnostics.Add(new Diagnostic(
+                    DiagnosticCodes.RefdesDuplicate,
+                    DiagnosticSeverity.Warning,
+                    "Integrity",
+                    $"Reference designator '{group.Key}' is used by more than one component.",
+                    group.Select(c => new EntityReference("COMPONENT", c.Id.Value)).ToArray(),
+                    Blocking: false));
             }
         }
 
-        foreach (var footprint in Objects(root["logicalDesign"]?["footprints"]))
+        foreach (var component in project.LogicalDesign.Components)
         {
-            var footprintId = RequiredId(footprint, "id");
-            foreach (var pad in Objects(footprint["pads"]))
+            if (component.FootprintId is null)
             {
-                var padId = RequiredId(pad, "id");
-                foreach (var layerId in Strings(pad["layerIds"]))
+                diagnostics.Add(Diagnostic.Warning(
+                    DiagnosticCodes.FootprintUnresolved,
+                    "Integrity",
+                    $"Component '{component.Id}' does not have a resolved footprint.",
+                    blocking: false));
+            }
+            else if (!index.Footprints.Contains(component.FootprintId.Value.Value))
+            {
+                diagnostics.Add(RefNotFound("Component footprint does not exist.", "COMPONENT", component.Id.Value, "FOOTPRINT", component.FootprintId.Value.Value));
+            }
+        }
+
+        foreach (var footprint in project.LogicalDesign.Footprints)
+        {
+            foreach (var pad in footprint.Pads)
+            {
+                foreach (var layerId in pad.LayerIds)
                 {
-                    if (!index.Layers.ContainsKey(layerId))
+                    if (!index.Layers.ContainsKey(layerId.Value))
                     {
-                        diagnostics.Add(LayerNotFound("Pad references an unknown layer.", "PAD", padId, layerId));
+                        diagnostics.Add(LayerNotFound("Pad references an unknown layer.", "PAD", pad.Id.Value, layerId.Value));
                     }
                 }
-
-                if (pad["customPolygon"] is not null && pad["shape"]?.GetValue<string>() == "CUSTOM" && pad["customPolygon"] is not JsonObject)
-                {
-                    diagnostics.Add(Diagnostic.Error(DiagnosticCodes.ProjectSchema, "Schema", $"Custom pad '{padId}' requires polygon geometry."));
-                }
             }
 
-            foreach (var graphic in Objects(footprint["graphics"]))
+            foreach (var graphic in footprint.Graphics)
             {
-                var layerId = graphic["layerId"]?.GetValue<string>();
-                if (layerId is not null && !index.Layers.ContainsKey(layerId))
+                if (!index.Layers.ContainsKey(graphic.LayerId.Value))
                 {
-                    diagnostics.Add(LayerNotFound("Footprint graphic references an unknown layer.", "FOOTPRINT", footprintId, layerId));
+                    diagnostics.Add(LayerNotFound("Footprint graphic references an unknown layer.", "FOOTPRINT", footprint.Id.Value, graphic.LayerId.Value));
                 }
             }
         }
     }
 
-    private static void ValidateNets(JsonObject root, ProjectIndex index, List<Diagnostic> diagnostics)
+    private static void ValidateNets(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
     {
-        foreach (var netClass in Objects(root["logicalDesign"]?["netClasses"]))
+        foreach (var net in project.LogicalDesign.Nets)
         {
-            RequiredId(netClass, "id");
-        }
-
-        foreach (var net in Objects(root["logicalDesign"]?["netlist"]?["nets"]))
-        {
-            var netId = RequiredId(net, "id");
-            var netClassId = net["netClassId"]?.GetValue<string>();
-            if (!string.IsNullOrWhiteSpace(netClassId) && !index.NetClasses.Contains(netClassId))
+            if (net.NetClassId is not null && !index.NetClasses.Contains(net.NetClassId.Value.Value))
             {
-                diagnostics.Add(RefNotFound("Net class does not exist.", "NET", netId, "NET_CLASS", netClassId));
+                diagnostics.Add(RefNotFound("Net class does not exist.", "NET", net.Id.Value, "NET_CLASS", net.NetClassId.Value.Value));
             }
 
-            foreach (var endpoint in Objects(net["endpoints"]))
+            foreach (var endpoint in net.Endpoints)
             {
-                var componentId = endpoint["componentId"]?.GetValue<string>();
-                var padId = endpoint["padId"]?.GetValue<string>();
-
-                if (componentId is null || !index.Components.TryGetValue(componentId, out var footprintId))
+                if (!index.Components.TryGetValue(endpoint.ComponentId.Value, out var footprintId))
                 {
-                    diagnostics.Add(RefNotFound("Net endpoint references an unknown component.", "NET", netId, "COMPONENT", componentId ?? "<missing>"));
+                    diagnostics.Add(RefNotFound("Net endpoint references an unknown component.", "NET", net.Id.Value, "COMPONENT", endpoint.ComponentId.Value));
                     continue;
                 }
 
-                if (padId is null || !index.PadToFootprint.TryGetValue(padId, out var padFootprintId))
+                if (endpoint.PadId is null)
                 {
-                    diagnostics.Add(RefNotFound("Net endpoint references an unknown pad.", "NET", netId, "PAD", padId ?? "<missing>"));
+                    diagnostics.Add(Diagnostic.Warning(
+                        DiagnosticCodes.PadMappingUnresolved,
+                        "Integrity",
+                        $"Net '{net.Id}' endpoint on component '{endpoint.ComponentId}' is preserved by pinRef but has no resolved pad.",
+                        blocking: false));
+                    continue;
+                }
+
+                if (!index.PadToFootprint.TryGetValue(endpoint.PadId.Value.Value, out var padFootprintId))
+                {
+                    diagnostics.Add(RefNotFound("Net endpoint references an unknown pad.", "NET", net.Id.Value, "PAD", endpoint.PadId.Value.Value));
+                    continue;
+                }
+
+                if (footprintId is null)
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        DiagnosticCodes.FootprintUnresolved,
+                        "Integrity",
+                        $"Component '{endpoint.ComponentId}' endpoint pad cannot be checked until footprint is resolved.",
+                        blocking: false));
                     continue;
                 }
 
@@ -119,193 +140,194 @@ public sealed class CanonicalIntegrityValidator(SchemaRegistry? schemaRegistry =
                         DiagnosticCodes.PadFootprintMismatch,
                         DiagnosticSeverity.Error,
                         "Integrity",
-                        $"Pad '{padId}' does not belong to component '{componentId}' footprint '{footprintId}'.",
-                        [new EntityReference("NET", netId), new EntityReference("COMPONENT", componentId), new EntityReference("PAD", padId)],
+                        $"Pad '{endpoint.PadId}' does not belong to component '{endpoint.ComponentId}' footprint '{footprintId}'.",
+                        [new EntityReference("NET", net.Id.Value), new EntityReference("COMPONENT", endpoint.ComponentId.Value), new EntityReference("PAD", endpoint.PadId.Value.Value)],
                         Blocking: true));
                 }
             }
         }
     }
 
-    private static void ValidateBoard(JsonObject root, ProjectIndex index, List<Diagnostic> diagnostics)
+    private static void ValidateBoard(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
     {
-        foreach (var stackupEntry in Objects(root["board"]?["stackup"]))
+        foreach (var stackupEntry in project.Board.Stackup)
         {
-            ValidateLayerReference(stackupEntry["layerId"]?.GetValue<string>(), "Stackup entry references an unknown layer.", "STACKUP", "stackup", index, diagnostics);
-            foreach (var referenceLayerId in Strings(stackupEntry["referenceLayerIds"]))
+            ValidateLayer(stackupEntry.LayerId.Value, "Stackup entry references an unknown layer.", "STACKUP", "stackup", index, diagnostics);
+            foreach (var reference in stackupEntry.ReferenceLayerIds)
             {
-                ValidateLayerReference(referenceLayerId, "Stackup reference layer does not exist.", "STACKUP", "stackup", index, diagnostics);
+                ValidateLayer(reference.Value, "Stackup reference layer does not exist.", "STACKUP", "stackup", index, diagnostics);
             }
         }
 
-        foreach (var region in Objects(root["board"]?["regions"]))
+        foreach (var region in project.Board.Regions)
         {
-            var regionId = RequiredId(region, "id");
-            foreach (var layerId in Strings(region["layerIds"]))
+            foreach (var layerId in region.LayerIds)
             {
-                ValidateLayerReference(layerId, "Region references an unknown layer.", "REGION", regionId, index, diagnostics);
+                ValidateLayer(layerId.Value, "Region references an unknown layer.", "REGION", region.Id.Value, index, diagnostics);
             }
         }
 
-        foreach (var keepout in Objects(root["board"]?["keepouts"]))
+        foreach (var keepout in project.Board.Keepouts)
         {
-            var keepoutId = RequiredId(keepout, "id");
-            foreach (var layerId in Strings(keepout["layerIds"]))
+            foreach (var layerId in keepout.LayerIds)
             {
-                ValidateLayerReference(layerId, "Keepout references an unknown layer.", "KEEPOUT", keepoutId, index, diagnostics);
+                ValidateLayer(layerId.Value, "Keepout references an unknown layer.", "KEEPOUT", keepout.Id.Value, index, diagnostics);
             }
         }
     }
 
-    private static void ValidateConstraints(JsonObject root, ProjectIndex index, List<Diagnostic> diagnostics)
+    private static void ValidateGroups(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
     {
-        foreach (var constraint in Objects(root["constraints"]))
+        foreach (var group in project.LogicalDesign.Groups)
         {
-            var constraintId = RequiredId(constraint, "id");
-            ValidateSelector(constraint["source"], constraintId, index, diagnostics);
-            ValidateSelector(constraint["target"], constraintId, index, diagnostics);
-
-            foreach (var layerId in Strings(constraint["scope"]?["layerIds"]))
+            if (group.ParentGroupId is not null && !index.Groups.Contains(group.ParentGroupId.Value.Value))
             {
-                ValidateLayerReference(layerId, "Constraint scope references an unknown layer.", "CONSTRAINT", constraintId, index, diagnostics);
+                diagnostics.Add(RefNotFound("Group parent does not exist.", "GROUP", group.Id.Value, "GROUP", group.ParentGroupId.Value.Value));
             }
-        }
-    }
 
-    private static void ValidateSemantics(JsonObject root, ProjectIndex index, List<Diagnostic> diagnostics)
-    {
-        foreach (var relationship in Objects(root["semantics"]?["relationships"]))
-        {
-            var relationshipId = RequiredId(relationship, "id");
-            foreach (var entityRef in Objects(relationship["entityRefs"]))
+            foreach (var member in group.Members)
             {
-                var entityType = entityRef["entityType"]?.GetValue<string>();
-                var entityId = entityRef["entityId"]?.GetValue<string>();
-                if (entityType is not null && entityId is not null && !index.Exists(entityType, entityId))
+                if (!index.Exists(member.EntityType, member.EntityId))
                 {
-                    diagnostics.Add(RefNotFound("Semantic relationship references an unknown entity.", "SEMANTIC_RELATIONSHIP", relationshipId, entityType, entityId));
+                    diagnostics.Add(RefNotFound("Group member references an unknown entity.", "GROUP", group.Id.Value, member.EntityType, member.EntityId));
                 }
             }
         }
-    }
 
-    private static void ValidatePhysicalState(JsonObject root, ProjectIndex index, List<Diagnostic> diagnostics)
-    {
-        var seenPoses = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var pose in Objects(root["physicalDesignState"]?["componentPoses"]))
+        foreach (var group in project.LogicalDesign.Groups)
         {
-            var componentId = pose["componentId"]?.GetValue<string>();
-            if (componentId is null || !index.Components.ContainsKey(componentId))
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var current = group;
+            while (current.ParentGroupId is not null)
             {
-                diagnostics.Add(RefNotFound("Component pose references an unknown component.", "PHYSICAL_DESIGN_STATE", "componentPoses", "COMPONENT", componentId ?? "<missing>"));
-            }
-            else if (!seenPoses.Add(componentId))
-            {
-                diagnostics.Add(Duplicate("Duplicate component pose.", "COMPONENT", componentId));
-            }
-        }
-
-        foreach (var via in Objects(root["physicalDesignState"]?["vias"]))
-        {
-            var viaId = RequiredId(via, "id");
-            ValidateNetReference(via["netId"]?.GetValue<string>(), "Via references an unknown net.", "VIA", viaId, index, diagnostics);
-            ValidateLayerReference(via["startLayerId"]?.GetValue<string>(), "Via start layer does not exist.", "VIA", viaId, index, diagnostics);
-            ValidateLayerReference(via["endLayerId"]?.GetValue<string>(), "Via end layer does not exist.", "VIA", viaId, index, diagnostics);
-        }
-
-        foreach (var route in Objects(root["physicalDesignState"]?["routes"]))
-        {
-            var routeId = RequiredId(route, "id");
-            var netId = route["netId"]?.GetValue<string>();
-            ValidateNetReference(netId, "Route references an unknown net.", "ROUTE", routeId, index, diagnostics);
-
-            foreach (var track in Objects(route["trackSegments"]))
-            {
-                var trackId = RequiredId(track, "id");
-                ValidateLayerReference(track["layerId"]?.GetValue<string>(), "Track references an unknown layer.", "TRACK_SEGMENT", trackId, index, diagnostics);
-            }
-
-            foreach (var viaId in Strings(route["viaIds"]))
-            {
-                if (!index.Vias.ContainsKey(viaId))
-                {
-                    diagnostics.Add(RefNotFound("Route references an unknown via.", "ROUTE", routeId, "VIA", viaId));
-                }
-                else if (netId is not null && index.Vias[viaId] is { } viaNetId && !StringComparer.Ordinal.Equals(netId, viaNetId))
+                if (!seen.Add(current.Id.Value) || current.ParentGroupId.Value.Value == group.Id.Value)
                 {
                     diagnostics.Add(new Diagnostic(
-                        DiagnosticCodes.RefNotFound,
+                        DiagnosticCodes.GroupCycle,
                         DiagnosticSeverity.Error,
                         "Integrity",
-                        $"Route '{routeId}' references via '{viaId}' that belongs to net '{viaNetId}'.",
-                        [new EntityReference("ROUTE", routeId), new EntityReference("VIA", viaId)],
+                        $"Group hierarchy contains a cycle at group '{group.Id}'.",
+                        [new EntityReference("GROUP", group.Id.Value)],
+                        Blocking: true));
+                    break;
+                }
+
+                if (!index.GroupMap.TryGetValue(current.ParentGroupId.Value.Value, out current!))
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void ValidatePhysicalState(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
+    {
+        if (project.PhysicalDesignState.BasedOnProjectRevision > project.ProjectRevision)
+        {
+            diagnostics.Add(new Diagnostic(
+                DiagnosticCodes.RefNotFound,
+                DiagnosticSeverity.Error,
+                "Integrity",
+                "PhysicalDesignState basedOnProjectRevision points to a future project revision.",
+                Blocking: true));
+        }
+
+        foreach (var poseGroup in project.PhysicalDesignState.ComponentPoses.GroupBy(p => p.ComponentId))
+        {
+            if (poseGroup.Count() > 1)
+            {
+                diagnostics.Add(Duplicate("Duplicate component pose.", "COMPONENT", poseGroup.Key.Value));
+            }
+        }
+
+        foreach (var pose in project.PhysicalDesignState.ComponentPoses)
+        {
+            if (!index.Components.ContainsKey(pose.ComponentId.Value))
+            {
+                diagnostics.Add(RefNotFound("Component pose references an unknown component.", "PHYSICAL_DESIGN_STATE", "componentPoses", "COMPONENT", pose.ComponentId.Value));
+            }
+        }
+
+        foreach (var via in project.PhysicalDesignState.Vias)
+        {
+            if (!index.Nets.Contains(via.NetId.Value))
+            {
+                diagnostics.Add(RefNotFound("Via references an unknown net.", "VIA", via.Id.Value, "NET", via.NetId.Value));
+            }
+
+            ValidateCopperLayer(via.StartLayerId.Value, "Via start layer does not exist or is not copper.", "VIA", via.Id.Value, index, diagnostics);
+            ValidateCopperLayer(via.EndLayerId.Value, "Via end layer does not exist or is not copper.", "VIA", via.Id.Value, index, diagnostics);
+        }
+
+        foreach (var route in project.PhysicalDesignState.Routes)
+        {
+            if (!index.Nets.Contains(route.NetId.Value))
+            {
+                diagnostics.Add(RefNotFound("Route references an unknown net.", "ROUTE", route.Id.Value, "NET", route.NetId.Value));
+            }
+
+            foreach (var track in route.TrackSegments)
+            {
+                ValidateCopperLayer(track.LayerId.Value, "Track references an unknown or non-copper layer.", "TRACK_SEGMENT", track.Id.Value, index, diagnostics);
+            }
+
+            foreach (var viaId in route.ViaIds)
+            {
+                if (!index.Vias.TryGetValue(viaId.Value, out var viaNetId))
+                {
+                    diagnostics.Add(RefNotFound("Route references an unknown via.", "ROUTE", route.Id.Value, "VIA", viaId.Value));
+                }
+                else if (!StringComparer.Ordinal.Equals(route.NetId.Value, viaNetId))
+                {
+                    diagnostics.Add(new Diagnostic(
+                        DiagnosticCodes.RouteViaNetMismatch,
+                        DiagnosticSeverity.Error,
+                        "Integrity",
+                        $"Route '{route.Id}' references via '{viaId}' that belongs to net '{viaNetId}'.",
+                        [new EntityReference("ROUTE", route.Id.Value), new EntityReference("VIA", viaId.Value)],
                         Blocking: true));
                 }
             }
         }
 
-        foreach (var zone in Objects(root["physicalDesignState"]?["copperZones"]))
+        foreach (var zone in project.PhysicalDesignState.CopperZones)
         {
-            var zoneId = RequiredId(zone, "id");
-            var netId = zone["netId"]?.GetValue<string>();
-            if (!string.IsNullOrWhiteSpace(netId))
+            if (zone.NetId is not null && !index.Nets.Contains(zone.NetId.Value.Value))
             {
-                ValidateNetReference(netId, "Copper zone references an unknown net.", "COPPER_ZONE", zoneId, index, diagnostics);
+                diagnostics.Add(RefNotFound("Copper zone references an unknown net.", "COPPER_ZONE", zone.Id.Value, "NET", zone.NetId.Value.Value));
             }
 
-            ValidateLayerReference(zone["layerId"]?.GetValue<string>(), "Copper zone references an unknown layer.", "COPPER_ZONE", zoneId, index, diagnostics);
+            ValidateCopperLayer(zone.LayerId.Value, "Copper zone references an unknown or non-copper layer.", "COPPER_ZONE", zone.Id.Value, index, diagnostics);
         }
     }
 
-    private static void ValidateSelector(JsonNode? selector, string constraintId, ProjectIndex index, List<Diagnostic> diagnostics)
+    private static void ValidateLayer(string layerId, string message, string ownerType, string ownerId, ProjectIndex index, List<Diagnostic> diagnostics)
     {
-        if (selector is not JsonObject selectorObject)
+        if (!index.Layers.ContainsKey(layerId))
         {
+            diagnostics.Add(LayerNotFound(message, ownerType, ownerId, layerId));
+        }
+    }
+
+    private static void ValidateCopperLayer(string layerId, string message, string ownerType, string ownerId, ProjectIndex index, List<Diagnostic> diagnostics)
+    {
+        if (!index.Layers.TryGetValue(layerId, out var layer))
+        {
+            diagnostics.Add(LayerNotFound(message, ownerType, ownerId, layerId));
             return;
         }
 
-        var kind = selectorObject["kind"]?.GetValue<string>();
-        if (kind != "ENTITY" && kind != "GROUP" && kind != "REGION")
+        if (!layer.IsCopperCapable)
         {
-            return;
-        }
-
-        var entityType = kind == "ENTITY" ? selectorObject["entityType"]?.GetValue<string>() : kind;
-        foreach (var entityId in Strings(selectorObject["entityIds"]))
-        {
-            if (entityType is not null && !index.Exists(entityType, entityId))
-            {
-                diagnostics.Add(RefNotFound("Constraint selector references an unknown entity.", "CONSTRAINT", constraintId, entityType, entityId));
-            }
+            diagnostics.Add(new Diagnostic(
+                DiagnosticCodes.LayerNotCopper,
+                DiagnosticSeverity.Error,
+                "Integrity",
+                $"{message} Layer '{layerId}' type is '{layer.LayerType}'.",
+                [new EntityReference(ownerType, ownerId)],
+                Blocking: true));
         }
     }
-
-    private static void ValidateLayerReference(string? layerId, string message, string ownerType, string ownerId, ProjectIndex index, List<Diagnostic> diagnostics)
-    {
-        if (layerId is null || !index.Layers.ContainsKey(layerId))
-        {
-            diagnostics.Add(LayerNotFound(message, ownerType, ownerId, layerId ?? "<missing>"));
-        }
-    }
-
-    private static void ValidateNetReference(string? netId, string message, string ownerType, string ownerId, ProjectIndex index, List<Diagnostic> diagnostics)
-    {
-        if (netId is null || !index.Nets.Contains(netId))
-        {
-            diagnostics.Add(RefNotFound(message, ownerType, ownerId, "NET", netId ?? "<missing>"));
-        }
-    }
-
-    private static IEnumerable<JsonObject> Objects(JsonNode? node) =>
-        node is JsonArray array ? array.OfType<JsonObject>() : [];
-
-    private static IEnumerable<string> Strings(JsonNode? node) =>
-        node is JsonArray array
-            ? array.Select(v => v?.GetValue<string>()).Where(v => v is not null).Select(v => v!)
-            : [];
-
-    private static string RequiredId(JsonObject obj, string propertyName) =>
-        obj[propertyName]?.GetValue<string>() ?? "<missing>";
 
     private static Diagnostic RefNotFound(string message, string ownerType, string ownerId, string missingType, string missingId) =>
         new(
@@ -336,52 +358,69 @@ public sealed class CanonicalIntegrityValidator(SchemaRegistry? schemaRegistry =
 
     private sealed class ProjectIndex
     {
-        public ProjectIndex(JsonObject root, List<Diagnostic> diagnostics)
+        public ProjectIndex(CanonicalProject project, List<Diagnostic> diagnostics)
         {
-            AddMany(root["sourceImports"], "SOURCE_IMPORT", SourceImports, diagnostics);
-            AddMany(root["logicalDesign"]?["netClasses"], "NET_CLASS", NetClasses, diagnostics);
-            AddMany(root["logicalDesign"]?["groups"], "GROUP", Groups, diagnostics);
-            AddMany(root["board"]?["layers"], "LAYER", Layers, diagnostics, layer => layer["layerType"]?.GetValue<string>() ?? string.Empty);
-            AddMany(root["board"]?["regions"], "REGION", Regions, diagnostics);
-            AddMany(root["board"]?["keepouts"], "KEEPOUT", Keepouts, diagnostics);
-            AddMany(root["constraints"], "CONSTRAINT", Constraints, diagnostics);
-            AddMany(root["physicalDesignState"]?["vias"], "VIA", Vias, diagnostics, via => via["netId"]?.GetValue<string>() ?? string.Empty);
-            AddMany(root["physicalDesignState"]?["copperZones"], "COPPER_ZONE", CopperZones, diagnostics);
-            AddMany(root["physicalDesignState"]?["routes"], "ROUTE", Routes, diagnostics);
+            AddMany(project.SourceImports.Select(x => x.Id.Value), "SOURCE_IMPORT", SourceImports, diagnostics);
+            AddMany(project.LogicalDesign.Footprints.Select(x => x.Id.Value), "FOOTPRINT", Footprints, diagnostics);
+            AddMany(project.LogicalDesign.Nets.Select(x => x.Id.Value), "NET", Nets, diagnostics);
+            AddMany(project.LogicalDesign.NetClasses.Select(x => x.Id.Value), "NET_CLASS", NetClasses, diagnostics);
+            AddMany(project.LogicalDesign.Groups.Select(x => x.Id.Value), "GROUP", Groups, diagnostics);
+            AddMany(project.Board.Regions.Select(x => x.Id.Value), "REGION", Regions, diagnostics);
+            AddMany(project.Board.Keepouts.Select(x => x.Id.Value), "KEEPOUT", Keepouts, diagnostics);
+            AddMany(project.Constraints.Select(x => x.Id.Value), "CONSTRAINT", Constraints, diagnostics);
+            AddMany(project.PhysicalDesignState.Routes.Select(x => x.Id.Value), "ROUTE", Routes, diagnostics);
+            AddMany(project.PhysicalDesignState.CopperZones.Select(x => x.Id.Value), "COPPER_ZONE", CopperZones, diagnostics);
 
-            foreach (var footprint in Objects(root["logicalDesign"]?["footprints"]))
+            foreach (var layer in project.Board.Layers)
             {
-                var footprintId = RequiredId(footprint, "id");
-                Add(Footprints, "FOOTPRINT", footprintId, footprint, diagnostics, _ => footprintId);
-                foreach (var pad in Objects(footprint["pads"]))
+                if (!Layers.TryAdd(layer.Id.Value, layer))
                 {
-                    Add(PadToFootprint, "PAD", RequiredId(pad, "id"), pad, diagnostics, _ => footprintId);
+                    diagnostics.Add(Duplicate("Duplicate layer id.", "LAYER", layer.Id.Value));
                 }
             }
 
-            foreach (var component in Objects(root["logicalDesign"]?["components"]))
+            foreach (var footprint in project.LogicalDesign.Footprints)
             {
-                Add(Components, "COMPONENT", RequiredId(component, "id"), component, diagnostics, c => c["footprintId"]?.GetValue<string>() ?? string.Empty);
+                foreach (var pad in footprint.Pads)
+                {
+                    if (!PadToFootprint.TryAdd(pad.Id.Value, footprint.Id.Value))
+                    {
+                        diagnostics.Add(Duplicate("Duplicate pad id.", "PAD", pad.Id.Value));
+                    }
+                }
             }
 
-            foreach (var net in Objects(root["logicalDesign"]?["netlist"]?["nets"]))
+            foreach (var component in project.LogicalDesign.Components)
             {
-                var id = RequiredId(net, "id");
-                if (!Nets.Add(id))
+                if (!Components.TryAdd(component.Id.Value, component.FootprintId?.Value))
                 {
-                    diagnostics.Add(Duplicate("Duplicate net id.", "NET", id));
+                    diagnostics.Add(Duplicate("Duplicate component id.", "COMPONENT", component.Id.Value));
+                }
+            }
+
+            foreach (var group in project.LogicalDesign.Groups)
+            {
+                GroupMap[group.Id.Value] = group;
+            }
+
+            foreach (var via in project.PhysicalDesignState.Vias)
+            {
+                if (!Vias.TryAdd(via.Id.Value, via.NetId.Value))
+                {
+                    diagnostics.Add(Duplicate("Duplicate via id.", "VIA", via.Id.Value));
                 }
             }
         }
 
-        public Dictionary<string, string> SourceImports { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, string> Components { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, string> Footprints { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> SourceImports { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string?> Components { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> Footprints { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> PadToFootprint { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Nets { get; } = new(StringComparer.Ordinal);
         public HashSet<string> NetClasses { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Groups { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, string> Layers { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, Group> GroupMap { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, BoardLayer> Layers { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Regions { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Keepouts { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Constraints { get; } = new(StringComparer.Ordinal);
@@ -389,13 +428,12 @@ public sealed class CanonicalIntegrityValidator(SchemaRegistry? schemaRegistry =
         public HashSet<string> CopperZones { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Routes { get; } = new(StringComparer.Ordinal);
 
-        public bool Exists(string entityType, string entityId)
-        {
-            return Normalize(entityType) switch
+        public bool Exists(string entityType, string entityId) =>
+            Normalize(entityType) switch
             {
-                "SOURCE_IMPORT" => SourceImports.ContainsKey(entityId),
+                "SOURCE_IMPORT" => SourceImports.Contains(entityId),
                 "COMPONENT" => Components.ContainsKey(entityId),
-                "FOOTPRINT" => Footprints.ContainsKey(entityId),
+                "FOOTPRINT" => Footprints.Contains(entityId),
                 "PAD" => PadToFootprint.ContainsKey(entityId),
                 "NET" => Nets.Contains(entityId),
                 "NET_CLASS" => NetClasses.Contains(entityId),
@@ -409,33 +447,15 @@ public sealed class CanonicalIntegrityValidator(SchemaRegistry? schemaRegistry =
                 "COPPER_ZONE" => CopperZones.Contains(entityId),
                 _ => true
             };
-        }
 
-        private static void AddMany(JsonNode? node, string entityType, HashSet<string> set, List<Diagnostic> diagnostics)
+        private static void AddMany(IEnumerable<string> ids, string entityType, HashSet<string> set, List<Diagnostic> diagnostics)
         {
-            foreach (var obj in Objects(node))
+            foreach (var id in ids)
             {
-                var id = RequiredId(obj, "id");
                 if (!set.Add(id))
                 {
                     diagnostics.Add(Duplicate($"Duplicate {entityType} id.", entityType, id));
                 }
-            }
-        }
-
-        private static void AddMany(JsonNode? node, string entityType, Dictionary<string, string> map, List<Diagnostic> diagnostics, Func<JsonObject, string>? valueFactory = null)
-        {
-            foreach (var obj in Objects(node))
-            {
-                Add(map, entityType, RequiredId(obj, "id"), obj, diagnostics, valueFactory ?? (_ => string.Empty));
-            }
-        }
-
-        private static void Add(Dictionary<string, string> map, string entityType, string id, JsonObject source, List<Diagnostic> diagnostics, Func<JsonObject, string> valueFactory)
-        {
-            if (!map.TryAdd(id, valueFactory(source)))
-            {
-                diagnostics.Add(Duplicate($"Duplicate {entityType} id.", entityType, id));
             }
         }
 
@@ -446,8 +466,6 @@ public sealed class CanonicalIntegrityValidator(SchemaRegistry? schemaRegistry =
                 "NETS" => "NET",
                 "LAYERS" => "LAYER",
                 "REGIONS" => "REGION",
-                "GROUP" => "GROUP",
-                "REGION" => "REGION",
                 var value => value
             };
     }

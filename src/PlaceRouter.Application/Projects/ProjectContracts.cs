@@ -1,33 +1,50 @@
 using PlaceRouter.Core.Diagnostics;
-using PlaceRouter.Domain.Prdx;
+using PlaceRouter.Core.Primitives;
+using PlaceRouter.Domain.Model;
 
 namespace PlaceRouter.Application.Projects;
 
-public sealed record ProjectLoadResult(CanonicalProject? Project, IReadOnlyList<Diagnostic> Diagnostics)
+public sealed record ProjectDocument(CanonicalProject Project, ProjectFileContext FileContext)
 {
-    public bool Success => Project is not null && Diagnostics.All(d => !d.Blocking);
+    public static ProjectDocument New(CanonicalProject project) =>
+        new(project, ProjectFileContext.New());
+}
+
+public sealed record ProjectFileContext(
+    string? SourcePath,
+    string FormatVersion,
+    IReadOnlyList<string> FeatureFlags,
+    IReadOnlyList<SourceFingerprint> SourceFingerprints,
+    IReadOnlyList<SupplementaryEntry> SupplementaryEntries)
+{
+    public static ProjectFileContext New() => new(null, "0.1.0", [], [], []);
+}
+
+public sealed record SourceFingerprint(SourceImportId SourceImportId, string Sha256);
+
+public sealed record SupplementaryEntry(string Path, long Length, string Sha256);
+
+public sealed record ProjectLoadResult(ProjectDocument? Document, IReadOnlyList<Diagnostic> Diagnostics)
+{
+    public bool Success => Document is not null && !Diagnostics.HasBlockingDiagnostics();
+    public CanonicalProject? Project => Document?.Project;
 }
 
 public sealed record ProjectSaveResult(IReadOnlyList<Diagnostic> Diagnostics)
 {
-    public bool Success => Diagnostics.All(d => !d.Blocking);
+    public bool Success => !Diagnostics.HasBlockingDiagnostics();
 }
 
 public sealed record ProjectValidationResult(IReadOnlyList<Diagnostic> Diagnostics)
 {
-    public bool Success => Diagnostics.All(d => !d.Blocking);
+    public bool Success => !Diagnostics.HasBlockingDiagnostics();
 }
 
-public sealed record PrdxWriteOptions(Action<string>? BeforeCommit = null);
-
-public interface IPrdxProjectReader
+public interface IProjectStore
 {
     ProjectLoadResult Load(string path);
-}
 
-public interface IPrdxProjectWriter
-{
-    ProjectSaveResult Save(CanonicalProject project, string path, PrdxWriteOptions? options = null);
+    ProjectSaveResult Save(ProjectDocument document, string path);
 }
 
 public interface ICanonicalProjectValidator

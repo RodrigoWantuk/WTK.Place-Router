@@ -1,17 +1,20 @@
-using PlaceRouter.Domain.Prdx;
+using PlaceRouter.Domain.Model;
 
 namespace PlaceRouter.Domain.Tests;
 
 public sealed class CanonicalProjectFactoryTests
 {
     [Fact]
-    public void Empty_project_has_required_prdx_sections()
+    public void Incomplete_project_does_not_invent_board_geometry()
     {
-        var project = CanonicalProjectFactory.CreateEmpty("New Board", "prj_test");
+        var project = CanonicalProjectFactory.CreateIncomplete("New Board", "prj_test");
 
-        Assert.Equal("prj_test", project.ProjectId);
-        Assert.Equal("New Board", project.Name);
-        Assert.Equal(2, project.Summary.Layers);
+        Assert.Equal("prj_test", project.ProjectId.Value);
+        Assert.Equal("New Board", project.Metadata.Name);
+        Assert.Null(project.Board.Outline);
+        Assert.Empty(project.Board.Layers);
+        Assert.Empty(project.Board.Stackup);
+        Assert.Equal("INCOMPLETE", project.PhysicalDesignState.Status);
         Assert.Equal(0, project.Summary.Components);
     }
 }
