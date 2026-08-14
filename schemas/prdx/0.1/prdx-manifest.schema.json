@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wtk.dev/schemas/prdx/0.1/prdx-manifest.schema.json",
+  "title": "WTK.Place&Router PRDX Manifest 0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "formatVersion",
+    "projectId",
+    "projectRevision",
+    "createdAt",
+    "modifiedAt",
+    "canonicalPayload",
+    "payloadSha256"
+  ],
+  "properties": {
+    "format": {
+      "const": "WTK.PRDX"
+    },
+    "formatVersion": {
+      "type": "string",
+      "pattern": "^0\\.1\\.[0-9]+$"
+    },
+    "projectId": {
+      "$ref": "#/$defs/id"
+    },
+    "projectRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "modifiedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "applicationVersion": {
+      "type": ["string", "null"]
+    },
+    "canonicalPayload": {
+      "const": "project.json"
+    },
+    "payloadSha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "featureFlags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "sourceFingerprints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceImportId", "sha256"],
+        "properties": {
+          "sourceImportId": {
+            "$ref": "#/$defs/id"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          }
+        }
+      },
+      "default": []
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    }
+  }
+}
