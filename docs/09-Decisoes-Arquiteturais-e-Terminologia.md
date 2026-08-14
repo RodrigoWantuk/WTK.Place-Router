@@ -1,320 +1,449 @@
-# 09 — Decisões arquiteturais atuais e terminologia canônica
+# 09 — Decisões Arquiteturais e Terminologia
 
 ## 1. Objetivo
 
-Este documento consolida decisões que já emergiram das discussões e corrige ambiguidades de nomenclatura existentes nos documentos iniciais.
+Este documento consolida decisões arquiteturais que já foram discutidas e evita que documentos anteriores sejam interpretados como se todas as opções ainda estivessem igualmente abertas.
 
-Ele não substitui os documentos detalhados. Sua função é servir como **índice de decisões vigentes**, deixando claro o que já está aceito, o que ainda é provisório e quais nomes devem ser usados daqui em diante.
+Ele também padroniza terminologia que apareceu com nomes diferentes durante a fase inicial de arquitetura.
 
----
+A regra é:
 
-## 2. Status das decisões
-
-### 2.1 Aceitas
-
-- Produto desktop-first.
-- Linguagem principal: C#.
-- UI multiplataforma com Avalonia.
-- MVVM restrito à Presentation Layer.
-- `CommunityToolkit.Mvvm` como toolkit MVVM preferencial.
-- Workspace no estilo CAD/IDE com docking real e painéis destacáveis.
-- Família `Dock.Avalonia` como direção inicial para docking.
-- Physical-design engine headless e independente da UI.
-- Placement e routing tratados como um problema físico conjunto.
-- Hard constraints validadas deterministicamente.
-- IA sem autoridade para declarar a PCB válida.
-- Toda interação com IA é uma operação tipada, versionada, auditável e com resposta estruturada.
-- IA fora do inner loop numérico.
-- DeepSeek como provider inicial de IA.
-- `deepseek-v4-flash` como modelo default da primeira integração.
-- Provider abstraction obrigatória: DeepSeek não deve aparecer no Domain nem no optimizer.
-
-### 2.2 Provisórias / a validar experimentalmente
-
-- PRDX como nome definitivo do formato canônico.
-- LNS + Simulated Annealing como primeira combinação principal de search.
-- Estratégia exata do detailed router.
-- Granularidade do global-routing grid/corridor model.
-- Uso automático de `deepseek-v4-pro` como escalonamento de raciocínio.
-- Uso de provider-native tool calling dentro de uma operação de IA.
-- Modelo de persistência interna de candidates/deltas.
-
-### 2.3 Em aberto
-
-- versão exata de .NET a fixar no início da implementação;
-- engine in-process versus processo headless separado;
-- política final de local-first/cloud execution;
-- suporte inicial completo de import/export por EDA;
-- biblioteca geométrica concreta;
-- estratégia futura de SI/PI/thermal solvers;
-- política comercial/licenciamento.
+- **Accepted** — direção arquitetural vigente;
+- **Provisional** — direção atual, ainda sujeita a benchmark/ADR mais específico;
+- **Open** — decisão propositalmente não fechada.
 
 ---
 
-## 3. Terminologia canônica
+## 2. Estado físico canônico
 
-Os primeiros documentos utilizaram `BoardState`, `PhysicalState` e `PhysicalDesignState` com sentidos próximos. A partir deste documento, a nomenclatura canônica é:
+### Accepted
 
-### 3.1 `Design`
-
-Representa o projeto canônico lógico e físico configurável:
-
-- board definition;
-- stackup;
-- components;
-- footprints/pads;
-- nets;
-- groups;
-- regions;
-- constraints;
-- semantic relationships;
-- manufacturing profile;
-- metadata/provenance.
-
-`Design` não é um candidate específico da otimização.
-
-### 3.2 `PhysicalDesignState`
-
-É a fotografia física de um candidate em um instante.
-
-Contém, conforme a fidelidade atual:
-
-- component poses;
-- tracks/routes;
-- vias;
-- layer assignments;
-- provisional routes;
-- reserved corridors;
-- congestion/occupancy derived views;
-- locks/frozen state;
-- findings ligados ao candidate;
-- métricas derivadas.
-
-Este é o nome que deve substituir novos usos de `BoardState` e `PhysicalState`.
-
-### 3.3 `PhysicalDesignTransaction`
-
-Representa uma alteração experimental aplicada sobre um `PhysicalDesignState` para produzir outro candidate.
-
-Exemplos:
+Nome canônico:
 
 ```text
-MoveComponent
-RotateComponent
-MoveGroup
-RipRoute
-RerouteNet
-ChangeCorridor
-ChangeLayerAssignment
+PhysicalDesignState
 ```
 
-A transaction possui diff, validação, métricas e resultado de commit/rollback.
+Representa o estado físico conjunto de placement + routing sobre o qual optimizer, transactions, verification e UI operam.
 
-### 3.4 `CandidateEvaluation`
-
-Resultado determinístico da avaliação de um `PhysicalDesignState`.
-
-Deve separar:
+Termos históricos encontrados nos documentos:
 
 ```text
-Validity
-Required violations
-Preference costs
-Optimization metrics
-Routing metrics
-Electrical proxies
-Regression information
+BoardState
+PhysicalState
 ```
 
-### 3.5 `Finding`
+Devem ser interpretados como referências conceituais antigas ao mesmo tipo de estado, salvo quando o contexto indicar explicitamente um snapshot/modelo diferente.
 
-Problema, risco ou observação detectada por engine, heurística, usuário ou IA.
+Novos contracts/classes devem usar `PhysicalDesignState`.
 
-Finding não equivale automaticamente a hard violation.
+### Transaction
 
-### 3.6 `AgentOperation`
-
-Uma única interação tipada com o provider de IA, definida em `08-Protocolo-de-Iteracoes-com-IA.md`.
-
-Exemplos:
+Nome canônico:
 
 ```text
-semantic.classify.v1
-constraint.suggest.v1
-routing.failure.diagnose.v1
-repair.plan.v1
-block.review.v1
-global.review.v1
+PhysicalDesignTransaction
 ```
+
+`DesignTransaction` pode permanecer como abreviação textual, mas a API principal deve usar o nome completo quando houver risco de ambiguidade.
 
 ---
 
-## 4. Nomes antigos
+## 3. Stack de produto
 
-Os seguintes termos encontrados nos documentos iniciais devem ser interpretados como aliases históricos:
+### Accepted
 
 ```text
-BoardState     → PhysicalDesignState
-PhysicalState  → PhysicalDesignState
-DesignTransaction → PhysicalDesignTransaction
+Primary language       C#
+Runtime                .NET
+Application type       Desktop-first
+UI framework           Avalonia
+Presentation pattern   MVVM
+MVVM toolkit           CommunityToolkit.Mvvm
+Docking                Dock.Avalonia family
+Engine                 Headless / platform-agnostic
 ```
 
-Novos documentos e código não devem introduzir novamente os aliases antigos.
+A versão exata de .NET/Avalonia/Dock é uma decisão de implementação a ser fixada no bootstrap do código usando versões estáveis/suportadas naquele momento.
 
 ---
 
-## 5. Arquitetura de alto nível vigente
+## 4. Fronteiras arquiteturais
+
+### Accepted
+
+MVVM é padrão somente da Presentation Layer.
+
+A aplicação segue conceitualmente:
 
 ```text
-External EDA
-    ↓
-Design Exchange / Importers
-    ↓
-Canonical Design (PRDX concept)
-    ↓
-Constraint Workspace
-    ↓
-PhysicalDesignEnvironment
-    │
-    ├── Geometry / DRC / Constraints
-    ├── Search / Optimization
-    ├── Global + Detailed Routing
-    ├── Verification / Regression
-    └── Semantic views
-    │
-    ↕
-Agent Orchestrator
-    ↓
-IA Provider Adapter
-    ↓
-DeepSeek initially
-```
-
-O Agent nunca contorna `PhysicalDesignEnvironment` para alterar geometria diretamente.
-
----
-
-## 6. Arquitetura de aplicação
-
-```text
-Avalonia Views
-      ↓
-ViewModels (MVVM)
-      ↓
+Presentation (Avalonia/MVVM)
+          ↓
 Application / Coordinators
-      ↓
-Domain + Physical Design Engine
-      ↓
-Infrastructure adapters
+          ↓
+Domain + deterministic engines
+          ↓
+Infrastructure / adapters
 ```
 
-Infrastructure adapters incluem:
+Princípios:
 
-- DeepSeek e futuros providers de IA;
-- EasyEDA/KiCad/DSN/IPC import/export;
-- persistence;
-- logging/telemetry;
-- eventual integration com solvers externos.
-
-O Domain não deve referenciar Avalonia, DeepSeek, EasyEDA ou detalhes de transporte.
+- ViewModels não executam geometry/routing/LLM diretamente;
+- Domain não referencia Avalonia;
+- EDA adapters não contaminam o canonical model;
+- AI providers são Infrastructure;
+- CLI/tests usam o mesmo Application/Core da GUI.
 
 ---
 
-## 7. Provider inicial de IA
+## 5. Padrões de projeto
 
-A decisão detalhada está em [`adr/0001-DeepSeek-como-Provider-Inicial.md`](adr/0001-DeepSeek-como-Provider-Inicial.md).
+### Accepted
 
-Resumo:
+Usar patterns onde resolvem um problema concreto, sem transformar o projeto em uma implementação ritualística de GoF/Clean Architecture.
+
+#### Strategy
+
+Para algoritmos substituíveis/benchmarkáveis:
 
 ```text
-Provider inicial       DeepSeek
-Modelo default         deepseek-v4-flash
-Endpoint preferido     API oficial DeepSeek
-Formato de operação    JSON estruturado
-Validação               JSON Schema local + semantic validation
-Thinking                definido por operation policy
-Provider abstraction    obrigatória
+route search strategy
+placement search strategy
+spatial index strategy
+geometry kernel adapter
+candidate scoring strategy
 ```
 
-O modelo exato é configuração operacional, não parte do Domain.
+#### Transaction / Command-like actions
+
+Mudanças físicas devem ser actions tipadas dentro de `PhysicalDesignTransaction`.
+
+Isso sustenta:
+
+- undo/redo;
+- replay;
+- audit;
+- candidate isolation;
+- regression;
+- explainability.
+
+#### Data-driven constraints + evaluator registry
+
+Constraints são principalmente dados tipados com evaluators registrados, evitando uma árvore OO gigantesca para cada regra trivial.
+
+#### Composite
+
+Groups hierárquicos.
+
+#### Domain events
+
+Para invalidation/recomputation/review triggers, sem depender de um framework pesado de event bus.
 
 ---
 
-## 8. Operação de IA: decisão inicial
+## 6. Interface
 
-Apesar de o documento `05` usar a linguagem de “tools”, a implementação inicial deve preferir um protocolo mais controlado:
+### Accepted
+
+Arquitetura visual no estilo CAD/IDE:
 
 ```text
-AgentOperation input
-      ↓
+TitleBar
+Toolbar
+DockControl
+StatusBar
+```
+
+Workspace default:
+
+```text
+Design Navigator | Board Workspace | Constraint Composer + Inspector
+                         |
+                  Bottom Workbench
+```
+
+Painéis auxiliares são Tool docks destacáveis, redimensionáveis e multi-monitor.
+
+Board/document surfaces usam DocumentDock.
+
+O `PcbViewportControl` usa rendering especializado; entidades físicas não são milhares de Avalonia Controls.
+
+---
+
+## 7. Provider de IA
+
+### Accepted
+
+Provider inicial:
+
+```text
 DeepSeek
-      ↓
-Typed JSON response
-      ↓
-Schema validation
-      ↓
-Application authorization
-      ↓
-Deterministic engine action/transaction
 ```
 
-Ou seja, inicialmente a IA **recomenda ou solicita ações estruturadas**. O orchestrator executa as ações autorizadas no engine.
+A escolha é operacional, não arquitetural.
 
-Provider-native tool calling pode ser incorporado depois, mas não é requisito para o primeiro ciclo autônomo e não deve alterar os contratos internos.
+O Place&Router usa uma abstração provider-agnostic.
 
----
+Model/provider usados em cada run devem ser registrados para replay/benchmark.
 
-## 9. Política de privacidade e credenciais
-
-A escolha inicial de um provider cloud cria uma fronteira explícita de dados.
-
-Regras:
-
-1. API key nunca entra no PRDX ou no arquivo de projeto.
-2. API key nunca é registrada em logs ou AgentOperation archives.
-3. Credenciais devem vir de configuração segura do usuário, environment/secret store apropriado ou mecanismo equivalente.
-4. O usuário deve conseguir identificar claramente qual provider/model está ativo.
-5. O sistema deve saber quais dados de projeto serão enviados externamente numa AgentOperation.
-6. O contexto enviado deve seguir o princípio de minimização: somente dados relevantes à operação.
-7. Futuro provider local/offline deve poder usar o mesmo AgentOperation contract.
-
-A existência de um provider cloud não altera a regra de que o engine determinístico e o projeto continuam funcionando sem IA.
+Detalhes no ADR-0001.
 
 ---
 
-## 10. Roadmap: dependências versus cronologia
+## 8. Protocolo de IA
 
-O documento `06-Roadmap-e-Criterios-de-Sucesso.md` deve ser interpretado principalmente como **ordem de dependências técnicas**, não como obrigação de concluir toda a engine antes de tocar na GUI.
+### Accepted
 
-O shell Avalonia, docking, import visualization e primeiras telas de Constraint Workspace podem avançar assim que os contratos mínimos de `Design`, `PhysicalDesignState`, import e constraints estiverem estáveis.
+Toda chamada é uma `AgentOperation` tipada/versionada.
 
-Portanto, é aceitável trabalhar em paralelo:
+Formato conceitual:
 
 ```text
-Workstream A — Core/Geometry/Design Model
-Workstream B — Import/PRDX
-Workstream C — Constraint Engine
-Workstream D — Desktop Shell/Constraint Workspace
-Workstream E — Routing/Search/Verification
-Workstream F — Agent Protocol/DeepSeek integration
+Stable policy
++ concise operation preamble
++ minimal structured context
++ strict response contract
 ```
 
-As dependências entre workstreams continuam obrigatórias; a cronologia não precisa ser estritamente linear.
+A IA fica fora do numerical inner loop.
+
+A resposta passa por:
+
+```text
+schema validation
+→ semantic validation
+→ action authorization
+→ deterministic preconditions
+→ candidate transaction
+```
+
+A IA nunca declara DRC/final validity.
 
 ---
 
-## 11. Regra para novas decisões
+## 9. Processamento local e estratégia algorítmica
 
-Quando uma decisão mudar comportamento arquitetural ou criar dependência externa relevante, ela deve ser registrada como ADR.
+### Accepted — direção
 
-Exemplos:
+O engine local deve preferir teoria consolidada e bibliotecas maduras antes de custom algorithms e antes de cloud reasoning.
 
-- versão de .NET;
-- geometry library;
-- engine in-process/out-of-process;
-- formato PRDX v0.1;
-- router algorithm baseline;
-- persistence engine;
-- provider/model routing policy.
+Ordem:
 
-Documentos conceituais descrevem o sistema; ADRs registram **por que uma escolha concreta foi tomada e em que status ela está**.
+```text
+known deterministic algorithm / mature library
+        ↓
+small Place&Router composition/adaptation
+        ↓
+custom algorithm only after benchmark evidence
+        ↓
+LLM only for semantic/strategic ambiguity
+```
+
+### Geometry
+
+Accepted direction:
+
+- canonical physical coordinates em `Int64`;
+- unidade inicial proposta de 1 µm;
+- `IGeometryKernel` abstrato;
+- Clipper2 como strong candidate para clipping/offsetting/boolean geometry;
+- broad-phase spatial index separado do exact geometry test;
+- NetTopologySuite Quadtree como candidate inicial de índice mutável.
+
+### Placement
+
+Accepted direction:
+
+```text
+fixed/mechanical-first
+→ graph/region-oriented coarse seed
+→ legalization
+→ fast multi-fidelity evaluation
+→ LNS
+→ Simulated Annealing refinement
+```
+
+LNS é a estrutura principal de reabertura de neighborhoods; SA é o mecanismo inicial para exploração/escape de mínimos locais.
+
+### Routing
+
+Accepted direction:
+
+```text
+pin access
+→ global routing / resource reservation
+→ detailed routing
+→ negotiated rip-up/reroute
+→ placement repair when routing evidence requires it
+```
+
+- coarse capacity grid por layer;
+- HPWL seguido de RMST/RSMT quando maior fidelidade for necessária;
+- FLUTE/equivalente como candidate de RSMT rápido;
+- A*/Dijkstra no global routing;
+- negotiated congestion PathFinder-like;
+- A* 2.5D como detailed route search inicial;
+- Hadlock como Strategy/benchmark futuro;
+- obstacle inflation para clearance;
+- exact DRC pós-rota.
+
+### Constraint pre-solving
+
+OR-Tools CP-SAT é candidate opcional apenas para pequenos subproblemas discretos bem delimitados. Não é o placement/geometry engine principal.
+
+### Benchmark-gated
+
+Ainda não são escolhas finais:
+
+- grid resolution;
+- spatial index definitivo;
+- uso definitivo de FLUTE;
+- SA schedule;
+- LNS sizes;
+- score weights/normalization;
+- routing→placement escalation threshold;
+- native geometry acceleration;
+- CP-SAT adoption em produção.
+
+Detalhes em `10-Processamento-Local-e-Algoritmos-Deterministicos.md` e ADR-0003.
+
+---
+
+## 10. Princípio de redução de input do usuário
+
+### Accepted
+
+A UX segue:
+
+```text
+IMPORT
+→ DERIVE DETERMINISTICALLY
+→ APPLY PROFILE DEFAULTS
+→ INFER/SUGGEST
+→ ASK USER ONLY IF MATERIAL
+```
+
+O sistema não deve exigir preenchimento em massa de propriedades apenas porque o schema possui campos opcionais.
+
+`Unknown` é válido.
+
+Uma pergunta é mostrada quando o dependency analysis indicar que aquela ausência bloqueia ou degrada materialmente uma decisão atual.
+
+---
+
+## 11. Credenciais, privacidade e cloud
+
+### Accepted
+
+Credenciais de provider:
+
+- não entram em PRDX;
+- não entram em project JSON;
+- não aparecem em logs normais;
+- ficam em configuração segura/local apropriada à plataforma.
+
+O contexto enviado à cloud deve ser minimizado pela operação e registrado/auditável conforme policy do produto.
+
+A UI deve deixar claro:
+
+- provider/model ativo;
+- quando uma operação cloud está sendo usada;
+- quando uma ação é totalmente local.
+
+Um provider local/offline futuro deve poder substituir DeepSeek sem alterar Domain/AgentOperation contracts.
+
+---
+
+## 12. Interoperabilidade
+
+### Accepted
+
+- canonical model interno desacoplado do EDA;
+- PRDX como nome provisório do formato/modelo persistível;
+- EasyEDA como primeiro adapter prático provável;
+- arquitetura preparada para KiCad/Specctra/IPC-2581/outros;
+- round-trip export é objetivo arquitetural.
+
+### Provisional
+
+O formato exato PRDX v0.1 ainda precisa de JSON Schema formal.
+
+---
+
+## 13. Joint placement/routing
+
+### Accepted
+
+Não existe top-level `PlacementEngine → RoutingEngine → Done`.
+
+Routing pode reabrir placement.
+
+Placement deve consumir feedback de routability/corridors antes de routing final.
+
+A abstração superior trabalha sobre o mesmo `PhysicalDesignState`.
+
+---
+
+## 14. Validade versus qualidade
+
+### Accepted
+
+```text
+Hard constraints → validity
+Preferences       → cost
+Goals             → optimization metric
+```
+
+Nenhum score positivo compensa uma Required violation.
+
+---
+
+## 15. Roadmap como dependências, não waterfall rígido
+
+### Accepted
+
+As fases do documento `06` descrevem principalmente **ordem de dependência técnica**, não uma obrigação de terminar todo o engine antes de começar UI/Agent infrastructure.
+
+Workstreams podem avançar em paralelo quando contracts mínimos estiverem estáveis.
+
+Exemplo:
+
+```text
+Core/Geometry ───────────────→ Routing/Search
+      │
+      ├────→ PRDX/Importer
+      │         │
+      │         └────→ Constraint Workspace UI
+      │
+      └────→ Domain contracts ─────→ Desktop shell/UI
+
+Agent protocol/provider adapter pode ser implementado/testado com fixtures
+antes de o optimizer final existir, mas não deve substituir engine capabilities.
+```
+
+---
+
+## 16. Open decisions
+
+Ainda propositalmente abertas:
+
+- versão final de .NET/Avalonia na primeira solução;
+- package names finais;
+- formato PRDX v0.1 completo;
+- first EasyEDA handoff concreto;
+- score normalization final;
+- thermal/SI/PI solver depth;
+- provider/model routing depois dos benchmarks iniciais;
+- política comercial/licenciamento geral do projeto;
+- eventual engine out-of-process versus in-process;
+- search avançado/MCTS/ML.
+
+---
+
+## 17. ADRs
+
+- `ADR-0001` — DeepSeek como provider inicial;
+- `ADR-0002` — Stack desktop e fronteiras arquiteturais;
+- `ADR-0003` — Processamento local e estratégia algorítmica.
+
+Novas decisões concretas que alterem architecture/invariants devem ganhar ADR próprio em vez de ficarem somente em conversa ou comentários de código.
