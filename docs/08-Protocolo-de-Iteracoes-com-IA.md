@@ -7,7 +7,8 @@ Este documento define **como o WTK.Place&Router deve interagir com modelos de IA
 Ele complementa [`05-Agente-IA-Revisao-e-Memoria.md`](05-Agente-IA-Revisao-e-Memoria.md):
 
 - o documento `05` define o papel conceitual do agente, tools, níveis de review, memória e explainability;
-- este documento define o **protocolo operacional de cada chamada**, contratos JSON, limites de responsabilidade, cadence das chamadas, validação de respostas, retries, logging e separação entre IA e algoritmos determinísticos.
+- este documento define o **protocolo operacional de cada chamada**, contratos JSON, limites de responsabilidade, cadence das chamadas, validação de respostas, retries, logging e separação entre IA e algoritmos determinísticos;
+- [`10-Processamento-Local-e-Algoritmos-Deterministicos.md`](10-Processamento-Local-e-Algoritmos-Deterministicos.md) define **quais algoritmos locais executam placement/routing/geometry/search e em que momento**, para que AgentOperations peçam capacidades reais em vez de compensarem lacunas do engine.
 
 A regra central é:
 
@@ -38,11 +39,11 @@ Uma macro-iteration pode acontecer dezenas ou centenas de vezes numa run.
 
 ### 2.2 Inner loop — numerical search
 
-Executado deterministicamente pelo engine.
+Executado localmente pelo engine.
 
 Exemplos:
 
-- testar 20.000 poses para um componente/cluster;
+- testar milhares de poses para um componente/cluster;
 - executar LNS;
 - simulated annealing;
 - calcular distância entre polygons;
@@ -63,7 +64,7 @@ Fluxo desejado:
 ```text
 LLM macro decision
       ↓
-structured request to deterministic engine
+structured request to local deterministic engine
       ↓
 thousands of numerical/search operations
       ↓
@@ -233,7 +234,7 @@ Isso permite:
 
 ---
 
-## 6. Não enviar o BoardState inteiro
+## 6. Não enviar o PhysicalDesignState inteiro
 
 O input deve conter apenas a **context view necessária à operação**.
 
@@ -452,7 +453,7 @@ Campos específicos podem complementar esse envelope.
 
 ## 12. A IA recomenda ações; o engine decide validade
 
-Um response da IA nunca é aplicado diretamente ao BoardState.
+Um response da IA nunca é aplicado diretamente ao `PhysicalDesignState`.
 
 Fluxo:
 
@@ -581,7 +582,7 @@ IA pode transformar métricas/diffs estruturados em explicações curtas e útei
 
 ---
 
-## 14. Responsabilidades do engine determinístico
+## 14. Responsabilidades do engine local determinístico
 
 A seguir estão responsabilidades que **não devem ser delegadas ao LLM como autoridade**.
 
@@ -610,6 +611,8 @@ A seguir estão responsabilidades que **não devem ser delegadas ao LLM como aut
 
 ### 14.3 Routing
 
+- pin-access analysis;
+- global routing/corridor reservation;
 - pathfinding;
 - A*/maze routing;
 - negotiated congestion;
@@ -662,6 +665,8 @@ A seguir estão responsabilidades que **não devem ser delegadas ao LLM como aut
 - layout persistence;
 - provenance persistence.
 
+A implementação algorítmica inicial dessas responsabilidades está especificada no documento `10`.
+
 ---
 
 ## 15. Responsabilidades híbridas
@@ -678,7 +683,7 @@ IA:
 
 Engine:
 
-- gera poses;
+- gera poses por LNS/SA e heurísticas locais;
 - testa rotations;
 - mede constraints;
 - estima routing;
@@ -820,300 +825,168 @@ Entrada:
 
 Saída:
 
-- ordered repair strategies;
-- scope;
-- fallback/escalation.
+- prioritized repair classes;
+- target entities;
+- objective;
+- fallbacks.
 
 ### `block.review.v1`
 
 Entrada:
 
-- semantic block;
-- measured geometry/metrics;
-- relevant routes;
-- constraints/findings.
+- functional block summary;
+- measured geometry/routing metrics;
+- semantic relationships;
+- open findings.
 
 Saída:
 
 - semantic findings;
 - evidence refs;
-- suggested follow-up analyses.
+- suggested deterministic checks/repairs.
 
 ### `global.review.v1`
 
 Entrada:
 
-- summarized global state;
-- hotspot list;
-- routing statistics;
-- block summaries;
+- compact whole-board metrics;
+- hotspot summaries;
+- critical relationships;
 - unresolved findings.
 
 Saída:
 
 - global concerns;
-- reprioritization suggestions;
-- areas requiring deeper inspection.
+- prioritized follow-ups;
+- possible neighborhoods to reopen.
 
 ### `adversarial.review.v1`
 
 Entrada:
 
-- fresh candidate snapshot summary;
-- constraints;
-- measured metrics;
-- no previous rationale unless strictly required.
+- independent candidate summary;
+- no decision-history justification unless explicitly needed.
 
 Saída:
 
-- independent findings only;
-- severity;
-- evidence requests/refs.
-
-### `candidate.compare.v1`
-
-Entrada:
-
-- candidates with normalized deterministic metrics;
-- allowed trade-off policy.
-
-Saída:
-
-- recommended candidate;
-- short trade-off summary;
-- unresolved ambiguity.
+- possible overlooked concerns;
+- evidence refs;
+- confidence.
 
 ---
 
-## 17. Exemplo completo de uma iteração
+## 17. AvailableActions como capability boundary
 
-Situação: routing de N137 falhou.
-
-### 17.1 Engine gera diagnóstico factual
-
-```json
-{
-  "failureId": "RF-137-09",
-  "netId": "N137",
-  "reason": "NO_FEASIBLE_CORRIDOR",
-  "requiredCorridorWidthMm": 1.46,
-  "maxAvailableWidthMm": 0.91,
-  "blockingObjects": ["U17", "C42"],
-  "alternativeLayers": []
-}
-```
-
-### 17.2 Operation preamble
-
-```text
-Diagnose the supplied routing failure and recommend the smallest repair scope worth exploring.
-Use only measured facts supplied in the input.
-Do not propose exact coordinates or claim that a repair will pass DRC.
-Return the required structured response only.
-```
-
-### 17.3 Structured request
-
-```json
-{
-  "operation": "routing.failure.diagnose.v1",
-  "requestId": "req-1842",
-  "runId": "run-14",
-  "designStateId": "state-313",
-  "objective": "Restore routability of N137 with minimum disruption",
-  "focus": {
-    "failureId": "RF-137-09"
-  },
-  "facts": {
-    "netId": "N137",
-    "requiredCorridorWidthMm": 1.46,
-    "maxAvailableWidthMm": 0.91,
-    "blockingObjects": ["U17", "C42"],
-    "alternativeLayers": []
-  },
-  "semanticContext": {
-    "U17": {
-      "role": "switching_regulator",
-      "source": "USER_CONFIRMED"
-    },
-    "C42": {
-      "role": "feedback_network_component",
-      "source": "AI_INFERRED",
-      "confidence": 0.93
-    }
-  },
-  "effectiveConstraints": [
-    "C-018",
-    "C-031",
-    "C-117"
-  ],
-  "availableActions": [
-    "REQUEST_LOCAL_OPTIMIZATION",
-    "REQUEST_LOCAL_REROUTE",
-    "ESCALATE_NEIGHBORHOOD"
-  ],
-  "responseContract": {
-    "id": "routing.failure.diagnose.response",
-    "version": "1"
-  }
-}
-```
-
-### 17.4 IA retorna
-
-```json
-{
-  "status": "PROPOSED",
-  "summary": "The routing failure is consistent with a local geometric blockage between U17 and C42.",
-  "cause": "LOCAL_GEOMETRIC_BLOCKAGE",
-  "confidence": 0.96,
-  "evidenceRefs": [
-    "facts.requiredCorridorWidthMm",
-    "facts.maxAvailableWidthMm",
-    "facts.blockingObjects"
-  ],
-  "recommendedActions": [
-    {
-      "action": "REQUEST_LOCAL_OPTIMIZATION",
-      "targetIds": ["U17", "C42"],
-      "objective": "Increase corridor capacity while preserving C-018, C-031 and C-117"
-    }
-  ],
-  "assumptions": [],
-  "missingInformation": []
-}
-```
-
-### 17.5 Engine executa inner loop
-
-```text
-Generate 8,000 candidate poses/rotations
-Reject hard-invalid candidates
-Run local global-routing estimate
-Detailed-route top 40
-Evaluate regressions
-```
-
-### 17.6 Resultado determinístico
-
-```json
-{
-  "testedCandidates": 8000,
-  "validCandidates": 431,
-  "detailedRoutedCandidates": 40,
-  "successfulRepairs": 3,
-  "bestCandidateId": "cand-7182",
-  "hardViolations": 0,
-  "routeCompleted": true,
-  "metricDelta": {
-    "vias": -1,
-    "wireLengthMm": -4.2,
-    "criticalCongestionPercent": -13.0
-  }
-}
-```
-
-Se não houver nova decisão semântica necessária, **não é obrigatório chamar IA novamente**.
-
-O candidate pode seguir diretamente para regression/review determinísticos.
-
----
-
-## 18. Event-driven AI invocation
-
-Assim como reviews, chamadas de IA devem ser disparadas por eventos relevantes, não por timer ou por toda mutation.
-
-Exemplos:
-
-```text
-EVENT: repeated local optimization failure
-→ routing.failure.diagnose
-```
-
-```text
-EVENT: functional block stabilized
-→ block.review
-```
-
-```text
-EVENT: no improvement after N neighborhoods
-→ optimization.focus.select
-```
-
-```text
-EVENT: candidate reaches sign-off stage
-→ global.review
-→ adversarial.review
-```
-
-```text
-EVENT: user requests suggestion
-→ constraint.suggest
-```
-
-Isso torna custo e comportamento previsíveis.
-
----
-
-## 19. Context escalation
-
-Começar sempre com contexto mínimo.
-
-Se a IA responder `NEEDS_INFORMATION`, o orchestrator pode fornecer mais dados de forma controlada.
+O modelo não deve poder inventar comandos arbitrários.
 
 Exemplo:
 
-```text
-Level 1
-local finding + 2 blockers
-
-Level 2
-related nets + local congestion + semantic relationships
-
-Level 3
-whole functional block
-
-Level 4
-broader board summary
+```json
+{
+  "availableActions": [
+    {
+      "type": "REQUEST_LOCAL_OPTIMIZATION",
+      "allowedTargetKinds": ["COMPONENT", "GROUP"],
+      "maxTargets": 12
+    },
+    {
+      "type": "REQUEST_REROUTE",
+      "allowedTargetKinds": ["NET", "NET_GROUP"]
+    },
+    {
+      "type": "REQUEST_CORRIDOR_REPLAN",
+      "allowedTargetKinds": ["NET", "NET_GROUP"]
+    }
+  ]
+}
 ```
 
-Nunca começar toda chamada com Level 4 por conveniência.
+A operação de IA só pode recomendar capability conhecida pelo Application Layer.
 
 ---
 
-## 20. Response validation em três níveis
+## 18. Context escalation
 
-Toda resposta passa por três validadores.
+Não iniciar uma chamada com o maior contexto possível.
 
-### 20.1 Syntactic validation
+Níveis conceituais:
 
-- valid JSON;
-- conforms to JSON Schema;
-- enum válido;
-- required fields presentes;
-- no unknown fields quando schema for strict.
+```text
+L1 local entity/neighborhood
+L2 + related nets/constraints/congestion
+L3 + whole functional block
+L4 + wider board summary
+```
 
-### 20.2 Semantic validation
+Uma operação começa no menor nível que provavelmente contém informação suficiente.
 
-Exemplos:
+Se a resposta for `NEEDS_INFORMATION`, o orchestrator pode buscar/escalar contexto conforme policy e budget.
 
-- IDs existem;
-- finding referido existe;
-- target é do tipo permitido;
-- confidence está em range;
-- operation result é coerente com operation type.
+---
 
-### 20.3 Authorization / capability validation
+## 19. Request additional information
 
-Exemplos:
+A IA não deve receber acesso livre ao banco/estado.
 
-- ação está em `availableActions`;
-- IA não pediu mover componente locked;
-- IA não pediu ignorar Required constraint;
-- IA não pediu tool inexistente;
-- operação respeita budgets/policy.
+Quando precisar de algo, retorna solicitação estruturada permitida.
 
-Somente depois disso a resposta entra no workflow.
+Exemplo:
+
+```json
+{
+  "status": "NEEDS_INFORMATION",
+  "missingInformation": [
+    {
+      "queryType": "RELATED_NETS",
+      "entityId": "U17",
+      "reason": "Need to verify whether moving U17 disrupts another critical interface"
+    }
+  ]
+}
+```
+
+O orchestrator decide se:
+
+- atende;
+- nega;
+- resume;
+- encerra por budget.
+
+---
+
+## 20. Validation em três níveis
+
+### 20.1 Syntax/schema
+
+Pergunta:
+
+> o JSON está no formato correto?
+
+### 20.2 Semantic/application
+
+Perguntas:
+
+```text
+entity exists?
+constraint exists?
+operation status is supported?
+confidence range valid?
+action arguments coherent?
+```
+
+### 20.3 Authorization/capability
+
+Perguntas:
+
+```text
+action allowed for this operation?
+target type allowed?
+target locked?
+budget permits it?
+policy permits it?
+```
+
+Somente depois disso uma candidate transaction pode ser iniciada.
 
 ---
 
@@ -1123,565 +996,431 @@ Retry não deve ser infinito.
 
 Categorias:
 
-### Transport/provider error
-
-- retry com backoff limitado;
-- eventualmente fallback provider/model se policy permitir.
-
 ### Invalid JSON/schema
 
-- provider structured output: tratar como provider failure;
-- fallback provider sem schema enforcement: uma tentativa de correction pode receber validation errors compactos.
+- retry curto pedindo correção estrutural;
+- usar mesmo request ID + attempt index;
+- se persistir, falhar operação.
 
-### Semantic invalid response
+### Semantic invalidity
 
-Exemplo:
+Exemplo: referência a entity inexistente.
 
-```text
-AI referenced component U999, which does not exist.
-```
+- fornecer error summary mínimo;
+- permitir no máximo pequeno número de correction attempts.
 
-Pode haver um único repair retry com:
+### Action rejected by deterministic engine
 
-```json
-{
-  "validationErrors": [
-    "targetIds[0]: unknown component U999"
-  ]
-}
-```
+Não é necessariamente erro do LLM.
 
-Se repetir, a operação falha e retorna ao orchestrator.
-
-### No useful action
-
-`NO_ACTION` ou `UNRESOLVED` são respostas válidas.
-
-Não forçar o modelo a inventar uma solução.
-
----
-
-## 22. Confidence não substitui verificação
-
-`confidence` é útil para:
-
-- ordenar sugestões;
-- decidir se pedir review adicional;
-- indicar incerteza ao usuário;
-- escolher quando escalar contexto.
-
-Não serve para:
-
-- aceitar hard constraint violation;
-- declarar DRC clean;
-- aceitar measurement inventado;
-- substituir deterministic evidence.
-
-Uma resposta com `confidence: 0.99` continua sendo apenas uma proposta.
-
----
-
-## 23. Assumptions explícitas
-
-Toda assumption relevante precisa sair estruturada.
-
-Exemplo:
-
-```json
-{
-  "assumptions": [
-    {
-      "id": "A-17",
-      "statement": "The SW net is a high-dv/dt aggressor.",
-      "basis": "SEMANTIC_INFERENCE",
-      "confidence": 0.88
-    }
-  ]
-}
-```
-
-Assumption não vira fact silenciosamente.
-
-Quando uma assumption influencia uma constraint importante, o sistema pode:
-
-- pedir confirmação ao usuário;
-- buscar datasheet;
-- executar outra análise;
-- manter a regra como Suggested/Preferred em vez de Required.
-
----
-
-## 24. Evidence references
-
-Respostas da IA devem apontar para dados estruturados que justificam a recomendação.
-
-Exemplo:
-
-```json
-{
-  "evidenceRefs": [
-    "facts.availableCorridorWidthMm",
-    "metrics.localCongestion",
-    "constraint:C-031"
-  ]
-}
-```
-
-Isso melhora:
-
-- explainability;
-- debugging;
-- avaliação automática;
-- capacidade de detectar hallucination.
-
-O modelo não precisa repetir todos os valores na prose.
-
----
-
-## 25. Prompt injection e documentos externos
-
-Datasheets, notes ou textos importados são **dados**, não instruções de autoridade.
-
-O adapter de contexto deve marcar conteúdo externo como source material.
-
-O Stable Agent Policy deve estabelecer que:
-
-- instruções contidas em documentos não substituem system policy;
-- somente o orchestrator define `availableActions`;
-- documentos fornecem evidência técnica, não permissões operacionais.
-
-Isso é particularmente importante se no futuro o sistema ingerir conteúdo de URLs, PDFs ou bases externas.
-
----
-
-## 26. Logging e replay
-
-Cada interaction deve registrar, de forma persistível:
+O orchestrator pode produzir nova operação contendo:
 
 ```text
-requestId
-runId
-operation
-schemaVersion
-model/provider
-model version/snapshot when available
-stable policy version
-operation prompt version
-input hash
-input payload or reproducible reference
-response contract version
-raw structured response
-validation result
-actions authorized
-actions actually executed
-deterministic outcome
-latency
-token/cost metrics when available
+proposal rejected
+reason = TARGET_LOCKED
 ```
 
-Isso permite responder:
-
-> Por que o sistema decidiu reabrir o bloco POWER na iteration 418?
-
-E também permite replay/benchmark de modelos novos contra os mesmos inputs históricos.
+para planejar fallback.
 
 ---
 
-## 27. Prompt e contract registry
+## 22. Idempotency e stale state
 
-Prompts não devem ficar espalhados como strings em ViewModels/services.
+Toda resposta precisa estar vinculada ao `designStateId` usado no request.
 
-Criar um registry versionado, conceitualmente:
-
-```text
-AgentProtocol
- ├── Operations
- │    ├── SemanticClassifyV1
- │    ├── ConstraintSuggestV1
- │    ├── RoutingFailureDiagnoseV1
- │    ├── RepairPlanV1
- │    └── ...
- │
- ├── Prompts
- ├── InputSchemas
- ├── OutputSchemas
- └── Validators
-```
-
-Cada operation definition contém:
+Antes de aplicar:
 
 ```text
-Operation ID
-Prompt version
-Input contract
-Output contract
-Allowed action types
-Recommended model class
-Default budget
-Retry policy
+response.designStateId == current expected state?
 ```
+
+Se a placa avançou enquanto a IA respondia, a proposta pode estar stale.
+
+Policy:
+
+- nunca aplicar silenciosamente uma action em state diferente;
+- revalidar/rebase quando seguro;
+- caso contrário descartar/reconsultar.
 
 ---
 
-## 28. Model routing por tipo de tarefa
+## 23. Budgets
 
-Não é necessário usar sempre o mesmo modelo.
+Toda operação deve conhecer limites.
 
-No futuro:
-
-```text
-semantic.classify
-→ cheaper/faster model may be sufficient
-
-global.review
-→ strongest reasoning model
-
-adversarial.review
-→ independent model/context
-
-simple explanation
-→ inexpensive model
-```
-
-Essa decisão pertence à Infrastructure/Application policy e não ao domínio.
-
-O operation contract permanece o mesmo mesmo que o provider mude.
-
----
-
-## 29. Cache de operações seguras
-
-Algumas respostas podem ser cacheadas quando o input efetivo é idêntico.
-
-Exemplos candidatos:
-
-- semantic classification de um component topology imutável;
-- datasheet-derived suggestions;
-- explanation de um deterministic finding.
-
-Não cachear cegamente operações dependentes de estado mutável.
-
-Cache key pode incluir:
-
-```text
-operation
-promptVersion
-schemaVersion
-modelPolicyVersion
-inputHash
-```
-
----
-
-## 30. Budgets por operação
-
-Cada operation deve definir limites como:
+Exemplos:
 
 ```json
 {
   "budgets": {
-    "maxOutputTokens": 1200,
-    "maxRequestedActions": 5,
-    "maxContextItems": 80,
-    "maxContextExpansionRounds": 2
+    "maxActions": 3,
+    "maxTargetsPerAction": 12,
+    "maxContextEscalations": 2,
+    "maxRetries": 1
   }
 }
 ```
 
-O objetivo é impedir respostas excessivas e comportamento imprevisível.
+Budgets globais da run incluem:
 
-Para tasks simples, outputs devem ser pequenos.
+- AI calls;
+- tokens/cost;
+- deterministic candidate count;
+- compute time;
+- repair depth;
+- no-improvement threshold.
 
 ---
 
-## 31. IA e commit de state
+## 24. Event-driven AI calls
 
-A IA nunca chama `commit` como autoridade irrestrita.
+Não chamar LLM em intervalo arbitrário.
 
-Arquitetura recomendada:
+Eventos úteis:
 
 ```text
-AI proposes strategy/action
-      ↓
-Application orchestrator
-      ↓
-Candidate transaction
-      ↓
-Deterministic validation
-      ↓
-Commit policy
+semantic uncertainty above threshold
+user asks Suggest Constraints
+repeated local deterministic failure
+optimization stalls
+functional block stabilizes
+candidate approaches final review
+unusual regression pattern
 ```
 
-Em modos autônomos, o orchestrator pode cometer automaticamente **somente** quando as políticas determinísticas permitirem.
-
-Exemplos:
-
-- zero Required regressions;
-- improvement criteria satisfied;
-- transaction within allowed scope;
-- no user lock violated.
+Eventos puramente geométricos resolvidos deterministicamente não precisam de LLM.
 
 ---
 
-## 32. IA não deve escolher entre fatos contraditórios silenciosamente
+## 25. Routing failure flow
 
-Se input contém inconsistência:
+Exemplo completo:
 
 ```text
-UserDefined frequency = 1 MHz
-Imported metadata = 10 MHz
+Detailed router
+    ↓
+RouteFailure N137
+    ↓
+local alternate path/layer/rip-up strategies exhausted by policy
+    ↓
+routing.failure.diagnose.v1
+    ↓
+LLM selects likely repair class / neighborhood
+    ↓
+request_local_optimization
+    ↓
+LNS/SA tests thousands of local placements
+    ↓
+global + local detailed rerouting
+    ↓
+regression engine
+    ↓
+structured outcome
 ```
 
-O context builder deve preservar provenance e, se a resolução não estiver definida por policy, gerar conflito.
-
-A IA pode sugerir uma resolução, mas não sobrescrever automaticamente o valor de maior autoridade.
-
-Ordem de autoridade deve ser definida separadamente para cada propriedade.
+A IA entra apenas quando o routing local já produziu facts/diagnostics úteis ou quando policy decidiu que o custo de continuar deterministicamente não compensa.
 
 ---
 
-## 33. Fresh-context review
+## 26. Agent Operation Definition
 
-`adversarial.review` deve deliberadamente evitar carregar rationale/history que possa enviesar a revisão.
+Cada operation deve possuir metadata versionada.
 
-Entrada preferida:
-
-- current candidate;
-- constraints;
-- semantic facts;
-- deterministic metrics;
-- unresolved findings.
-
-Evitar:
-
-- “decidimos colocar U7 aqui porque...”;
-- lista de tentativas anteriores;
-- defesa do candidate atual.
-
-Depois o orchestrator compara findings independentes com o histórico.
-
----
-
-## 34. Human-in-the-loop
-
-Existem operações em que usuário deve permanecer autoridade.
-
-Exemplos:
-
-- transformar AI suggestion em Required constraint;
-- aceitar risco não hard, mas relevante;
-- resolver conflito entre duas intenções de engenharia;
-- confirmar semantic inference de baixa confiança;
-- bloquear posição mecânica crítica;
-- alterar manufacturing profile.
-
-O nível de autonomia pode evoluir, mas provenance e audit trail permanecem.
-
----
-
-## 35. Estado da run e máquina de estados
-
-Uma run autônoma pode ser organizada como:
+Modelo conceitual:
 
 ```text
-PREPARE
-  ↓
-SELECT_FOCUS
-  ↓
-OPTIMIZE_DETERMINISTICALLY
-  ↓
-VERIFY
-  ↓
-┌───────────────┐
-│ success?      │── yes ─→ STABILIZE / NEXT_FOCUS
-└───────┬───────┘
-        no
-        ↓
-DIAGNOSE
-        ↓
-PLAN_REPAIR
-        ↓
-REPAIR_DETERMINISTICALLY
-        ↓
-VERIFY_REGRESSION
-        ↓
-NEXT_ITERATION
+AgentOperationDefinition
+ ├── id
+ ├── version
+ ├── purpose
+ ├── preambleTemplate
+ ├── inputSchemaId
+ ├── responseSchemaId
+ ├── allowedActions
+ ├── defaultModelPolicy
+ ├── defaultBudgets
+ ├── retryPolicy
+ └── contextBuilder
 ```
 
-IA aparece apenas em estados em que reasoning é útil.
+Não espalhar prompts hardcoded pelo código.
 
 ---
 
-## 36. Quando não chamar IA
+## 27. Prompt registry
 
-Não chamar LLM para:
-
-- medir distância;
-- testar clearance;
-- saber se polygon intersecta;
-- escolher entre duas rotas se score determinístico já determina vencedor;
-- recalcular wirelength;
-- validar JSON;
-- contar vias;
-- executar undo/redo;
-- aplicar regra de fabricação;
-- selecionar melhor candidate quando existe uma ordenação matemática inequívoca;
-- repetir semantic classification cujo resultado confiável já está persistido.
-
-Princípio:
-
-> se o problema pode ser resolvido corretamente, barato e deterministicamente, não chamar IA.
-
----
-
-## 37. Quando chamar IA
-
-Chamar quando há valor real de reasoning, por exemplo:
-
-- semântica não explicitamente codificada;
-- trade-off contextual;
-- escolha de estratégia;
-- diagnóstico de failure complexo;
-- decomposição de problema;
-- revisão funcional;
-- hipótese de repair;
-- reconhecimento de topology;
-- interpretação de documentação;
-- adversarial review;
-- explicação ao usuário.
-
----
-
-## 38. Métricas específicas do agente
-
-Além das métricas físicas da PCB, medir:
-
-```text
-AI calls per run
-AI calls by operation
-input tokens
-output tokens
-cost
-latency
-schema failure rate
-semantic validation failure rate
-retry rate
-NO_ACTION rate
-action acceptance rate
-proposal success rate
-regression caused by proposed repair
-improvement after AI-selected neighborhood
-finding precision/recall em benchmark quando houver ground truth
-```
-
-Isso permite saber se a IA realmente agrega valor.
-
----
-
-## 39. A/B testing de prompts e modelos
-
-Como requests e contracts são versionados, o mesmo input pode ser testado contra:
-
-```text
-prompt v1 vs v2
-model A vs model B
-with/without case retrieval
-with/without datasheet context
-```
-
-A comparação deve usar deterministic outcomes, não preferência subjetiva de texto.
+Prompts devem ser assets versionados.
 
 Exemplo:
 
 ```text
-Repair proposal success
-v1 = 61%
-v2 = 78%
+Agent/Prompts/
+  semantic.classify.v1.txt
+  constraint.suggest.v1.txt
+  repair.plan.v1.txt
+  global.review.v1.txt
 ```
 
----
-
-## 40. Requisitos de implementação
-
-1. Toda chamada possui `operation` versionada.
-2. Toda chamada possui input estruturado.
-3. Toda chamada possui response contract versionado.
-4. Structured output do provider deve ser usado quando disponível.
-5. Output é validado antes de qualquer ação.
-6. IA não modifica BoardState diretamente.
-7. IA não é autoridade de DRC ou hard constraints.
-8. IA não fica no inner loop numérico.
-9. Contexto é mínimo e orientado ao problema.
-10. Unknown permanece unknown.
-11. Inference possui provenance/confidence.
-12. Resposta contém justificativa curta/evidence refs, não chain-of-thought.
-13. Retry é limitado.
-14. `NO_ACTION` e `UNRESOLVED` são resultados válidos.
-15. Todas as interações importantes são auditáveis/reproduzíveis.
-16. Prompts e schemas vivem em registry versionado.
-17. Model/provider são abstraídos do domínio.
-18. Deterministic outcome é usado para avaliar qualidade da decisão da IA.
-19. Fresh-context adversarial review deve ser possível.
-20. Human authority permanece explícita para decisões de engenharia que exigem confirmação.
+Alterar prompt é mudança de comportamento e precisa ser rastreável em benchmarks.
 
 ---
 
-## 41. Próximas especificações derivadas
+## 28. Schema registry
 
-Antes da implementação do Agent, este documento deve gerar contratos concretos:
-
-1. `AgentOperationEnvelope` v1;
-2. `AgentResponseEnvelope` v1;
-3. JSON Schema de `semantic.classify.v1`;
-4. JSON Schema de `constraint.suggest.v1`;
-5. JSON Schema de `routing.failure.diagnose.v1`;
-6. JSON Schema de `repair.plan.v1`;
-7. JSON Schema de `block.review.v1`;
-8. JSON Schema de `global.review.v1`;
-9. JSON Schema de `adversarial.review.v1`;
-10. `AgentOperationRegistry` contract;
-11. `AgentProviderAdapter` contract;
-12. retry/validation policy;
-13. interaction log/replay schema.
-
-Esses schemas devem ser tratados como APIs internas versionadas e cobertos por testes de contract.
-
----
-
-## 42. Síntese
-
-A interação ideal não é:
+Contratos também são assets versionados.
 
 ```text
-"Aqui está a PCB. O que faço agora?"
+Agent/Schemas/
+  common.request.v1.schema.json
+  common.response.v1.schema.json
+  repair.plan.request.v1.schema.json
+  repair.plan.response.v1.schema.json
 ```
 
-É:
+Uma run registra os schema IDs/hashes usados.
+
+---
+
+## 29. Provider abstraction
+
+Application Layer envia uma operação abstrata.
+
+Adapter do provider decide:
+
+- formato da chamada;
+- JSON mode/structured output;
+- thinking mode;
+- model identifier;
+- token settings;
+- retries de transporte.
+
+Nenhum business rule depende de sintaxe DeepSeek/OpenAI/etc.
+
+DeepSeek é o provider inicial conforme ADR-0001.
+
+---
+
+## 30. Model policies por operação
+
+Não espalhar model names no código.
+
+Exemplo conceitual:
 
 ```text
-Operation: routing.failure.diagnose.v1
-
-Concise task preamble
-      +
-minimal structured facts
-      +
-constraints/findings/metrics relevant to this problem
-      +
-allowed action vocabulary
-      +
-strict response contract
-      ↓
-LLM reasoning
-      ↓
-validated structured proposal
-      ↓
-deterministic execution/search
-      ↓
-measured outcome
+FAST
+STANDARD_REASONING
+DEEP_REASONING
 ```
 
-A IA fornece **engenharia, semântica, estratégia e diagnóstico**.
+Operation definition escolhe policy.
 
-O engine fornece **geometria, routing, busca numérica, constraints, medição, transações e validade**.
+Provider config resolve para model/thinking settings.
 
-Essa fronteira é o que permite usar um foundation model poderoso sem transformar a correção física da PCB em uma aposta sobre a resposta textual de um LLM.
+Isso permite benchmark e troca de provider sem alterar contracts.
+
+---
+
+## 31. Thinking mode
+
+Thinking/reasoning mode é propriedade de execução do provider, não do Domain.
+
+Exemplo:
+
+```text
+semantic.classify.v1 → FAST
+repair.plan.v1       → STANDARD_REASONING
+adversarial.review   → DEEP_REASONING
+```
+
+Essas mappings precisam ser benchmarkadas.
+
+---
+
+## 32. Logging e audit trail
+
+Registrar no mínimo:
+
+```text
+operation id/version
+request id/run id
+design state id
+provider/model
+model policy
+prompt version/hash
+schema version/hash
+input hash
+structured input
+structured output
+validation result
+proposed actions
+executed actions
+deterministic outcome
+latency
+tokens/cost when available
+```
+
+Secrets nunca entram nesse log.
+
+---
+
+## 33. Replay
+
+Uma chamada histórica deve poder ser reproduzida em harness:
+
+```text
+same operation
+same structured input
+provider/model A
+provider/model B
+prompt v1
+prompt v2
+```
+
+Comparar:
+
+- schema validity;
+- action quality;
+- deterministic success;
+- repair success;
+- regressions;
+- tokens;
+- latency;
+- cost.
+
+---
+
+## 34. Avaliar IA pelo outcome
+
+Não medir apenas “qualidade textual”.
+
+Métricas:
+
+```text
+proposal validity rate
+proposal execution rate
+repair success rate
+finding precision/recall where ground truth exists
+improvement after AI-selected neighborhood
+schema failure rate
+retry rate
+cost/run
+latency/run
+```
+
+A pergunta correta é:
+
+> a macro-decisão da IA melhora o comportamento do engine local?
+
+---
+
+## 35. Explainability sem chain-of-thought
+
+Guardar:
+
+```text
+summary
+reason code
+facts/evidence refs
+metric deltas
+chosen action
+result
+```
+
+Não depender de raciocínio privado detalhado.
+
+Isso é mais compacto, auditável e estável.
+
+---
+
+## 36. Privacidade e minimização de dados
+
+Como o provider inicial é cloud:
+
+- enviar apenas context view necessária;
+- não enviar automaticamente projeto inteiro;
+- não enviar secrets/credentials;
+- permitir identificar no audit log qual operação enviou quais entidades/campos;
+- separar provider configuration do PRDX.
+
+A UI deve poder indicar quando uma operação usa cloud versus processamento totalmente local.
+
+---
+
+## 37. Falha/indisponibilidade cloud
+
+Sem IA ainda deve ser possível:
+
+- importar;
+- editar constraints;
+- geometry/DRC;
+- placement search determinístico;
+- global/detailed routing;
+- rip-up/reroute;
+- regressão;
+- export/report.
+
+A run pode perder semantic reasoning avançado, mas não a integridade física do engine.
+
+---
+
+## 38. Testes de AgentOperations
+
+Cada operation deve possuir fixtures de:
+
+- happy path;
+- unknown data;
+- malformed response;
+- hallucinated entity;
+- unauthorized action;
+- stale state;
+- no-action;
+- needs-information;
+- retry exhausted;
+- deterministic rejection.
+
+---
+
+## 39. Critério de implementação de nova AgentOperation
+
+Uma nova operation só deve existir se:
+
+1. o problema realmente exige reasoning/semantic judgment;
+2. o input pode ser representado compactamente;
+3. existe response contract claro;
+4. existem actions/capabilities locais reais para executar a decisão;
+5. outcome pode ser medido.
+
+Não criar operation porque “talvez seja útil perguntar à IA”.
+
+---
+
+## 40. Ordem inicial de implementação
+
+Depois do engine local mínimo necessário:
+
+1. `semantic.classify.v1`;
+2. `constraint.suggest.v1`;
+3. `routing.failure.diagnose.v1`;
+4. `repair.plan.v1`;
+5. `optimization.focus.select.v1`;
+6. `block.review.v1`;
+7. `global.review.v1`;
+8. `adversarial.review.v1`.
+
+`floorplan.strategy.v1` pode entrar cedo se os primeiros test boards mostrarem benefício claro.
+
+---
+
+## 41. Princípio final
+
+```text
+LOCAL ENGINE
+measures, searches, routes, validates, commits
+
+CLOUD AI
+classifies, prioritizes, diagnoses, proposes, reviews
+```
+
+A interface entre ambos é sempre estruturada, versionada e auditável.
+
+Se uma operação puder ser resolvida de forma robusta por algoritmo local conhecido, ela **não deve virar uma chamada de IA apenas por conveniência de implementação**.
