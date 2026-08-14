@@ -33,6 +33,7 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 ## Architecture Decision Records
 
 - [ADR-0001 — DeepSeek como provider inicial de IA](docs/adr/0001-DeepSeek-como-Provider-Inicial.md)
+- [ADR-0002 — Stack desktop e fronteiras arquiteturais](docs/adr/0002-Stack-Desktop-e-Fronteiras-Arquiteturais.md)
 
 ## Estado
 
