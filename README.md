@@ -8,13 +8,14 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 
 - Placement e routing são tratados como um único problema físico codependente, não como duas etapas independentes.
 - A IA não é a autoridade de validade da PCB; regras, geometria, DRC e métricas determinísticas são a fonte de verdade.
-- O estado completo da placa fica fora do prompt. O agente consulta e modifica o `BoardState` através de tools estruturadas.
-- Cada alteração relevante pode ser tratada como uma transação, avaliada por regressão e aceita, reparada ou revertida.
+- O estado físico completo da placa fica fora do prompt. O agente consulta views estruturadas do `PhysicalDesignState` e propõe ações tipadas; somente o engine pode aplicá-las.
+- Cada alteração relevante é representável como `PhysicalDesignTransaction`, avaliada por regressão e aceita, reparada ou revertida.
 - Hard constraints nunca são transformadas apenas em penalidades de score: uma solução inválida continua inválida.
 - O usuário deve conseguir expressar intenção elétrica e física visualmente, sem editar arquivos de regras manualmente.
 - O primeiro objetivo é demonstrar um ciclo autônomo completo e verificável em placas pequenas/médias, não substituir um layout engineer em qualquer classe de PCB desde a primeira versão.
-- A interface é desktop-first, com arquitetura Avalonia + MVVM e workspace no estilo IDE/CAD, mantendo o physical-design engine headless e independente da UI.
-- Interações com IA são operações tipadas e versionadas: preamble conciso + contexto JSON mínimo + response contract estrito; a IA permanece fora do inner loop numérico e toda proposta é validada pelo engine antes de alterar o estado.
+- A interface é desktop-first, com arquitetura C# + Avalonia + MVVM e workspace no estilo IDE/CAD, mantendo o physical-design engine headless e independente da UI.
+- Interações com IA são operações tipadas e versionadas: preamble conciso + contexto JSON mínimo + response contract estrito; a IA permanece fora do inner loop numérico e toda proposta é validada antes de alterar o estado.
+- DeepSeek é o provider inicial de IA, com `deepseek-v4-flash` como modelo default da primeira integração, sempre atrás de uma abstração provider-agnostic.
 
 ## Documentação inicial
 
@@ -27,6 +28,11 @@ O projeto **não pretende, inicialmente, substituir o EDA usado para criar o cir
 7. [Roadmap técnico, experimento inicial e critérios de sucesso](docs/06-Roadmap-e-Criterios-de-Sucesso.md)
 8. [Arquitetura da interface desktop, docking e workspaces](docs/07-Arquitetura-da-Interface.md)
 9. [Protocolo de iterações com IA e fronteira determinística](docs/08-Protocolo-de-Iteracoes-com-IA.md)
+10. [Decisões arquiteturais atuais e terminologia canônica](docs/09-Decisoes-Arquiteturais-e-Terminologia.md)
+
+## Architecture Decision Records
+
+- [ADR-0001 — DeepSeek como provider inicial de IA](docs/adr/0001-DeepSeek-como-Provider-Inicial.md)
 
 ## Estado
 
