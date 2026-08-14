@@ -13,6 +13,12 @@ A principal referência prática é a interface atual do **WTK.MediaForge Studio
 
 O objetivo não é copiar a interface visual do MediaForge literalmente. O objetivo é reaproveitar os padrões de arquitetura e ergonomia que fazem sentido para uma ferramenta CAD/EDA.
 
+A UI também precisa respeitar o princípio funcional definido nos documentos `02` e `10`:
+
+> **importar/derivar/inferir antes de perguntar ao usuário.**
+
+Advanced algorithm parameters pertencem a Diagnostics/Benchmark mode; o fluxo comum trabalha com intents, perfis e perguntas contextuais somente quando um unknown é materialmente necessário.
+
 ---
 
 ## 2. Direção de plataforma
@@ -555,6 +561,14 @@ Components | Nets | Groups | Rules
 - context menus;
 - bulk actions.
 
+O navigator deve sinalizar missing data com impacto diferente:
+
+```text
+informational unknown
+confidence-reducing unknown
+required-now unknown
+```
+
 ### 13.2 Components
 
 Exemplo:
@@ -607,6 +621,8 @@ ANALOG
 └── ADC_FRONTEND
 ```
 
+Grupos sugeridos automaticamente devem mostrar provenance e permitir Accept/Edit/Reject.
+
 ### 13.5 Rules
 
 Agrupar por:
@@ -628,50 +644,59 @@ Thermal
 
 ## 14. Selection Service central
 
-Seleção é uma preocupação transversal e precisa ser centralizada.
+Seleção é estado compartilhado da Presentation/Application boundary.
 
-Não devemos ligar painel A diretamente a painel B, painel C e canvas.
-
-Modelo conceitual:
+Estrutura conceitual:
 
 ```text
 SelectionState
  ├── Primary
  ├── SelectedObjects[]
  ├── SelectionKind
- ├── Source
- └── optional focus/navigation intent
+ └── Source
 ```
 
-Seleção de U17 no Navigator deve poder:
+Selecionar `U17` no Navigator deve atualizar:
 
-1. selecionar U17 no canvas;
-2. atualizar Inspector;
-3. atualizar Constraint Composer;
-4. destacar constraints relacionadas;
-5. filtrar findings relacionados;
-6. opcionalmente centralizar viewport.
+- canvas highlight;
+- Inspector;
+- Constraint Composer;
+- related findings;
+- related nets/relationships.
 
-Seleção no canvas executa o fluxo inverso.
+Selecionar no canvas produz o fluxo inverso.
 
-### 14.1 Multi-selection
+Não sincronizar painéis por referências diretas entre ViewModels.
 
-É requisito inicial, não melhoria futura.
+---
+
+## 15. Multi-selection
+
+Multi-selection é requisito inicial, não melhoria tardia.
 
 Exemplo:
+
+```text
+C17
+C18
+C19
+C20
+```
+
+Inspector:
 
 ```text
 4 Components Selected
 
 Shared properties
-Side    Top
-Group   POWER_BUCK
+Side          Top
+Group         POWER_BUCK
 
 Bulk actions
 Create Group
 Add Constraint
 Lock
-Assign Region
+Set Region
 ```
 
 Ou:
@@ -679,44 +704,53 @@ Ou:
 ```text
 12 Nets Selected
 
-Set electrical properties
-Set routing class
-Create group
-Add relationship constraint
+Set:
+Current
+Frequency
+Aggressor level
+Routing class
 ```
+
+Bulk edit existe para exceções/ajustes; não para obrigar o usuário a preencher o que o enrichment já consegue obter.
 
 ---
 
-## 15. Inspector contextual
+## 16. Inspector Host
 
-Preservar o padrão `InspectorHostViewModel.SelectedPage` do MediaForge.
-
-Mappings planejados:
+Padrão contextual:
 
 ```text
-Component   → ComponentInspector
-Net         → NetInspector
-Group       → GroupInspector
-Constraint  → ConstraintInspector
-Region      → RegionInspector
-Via         → ViaInspector
-Track       → TrackInspector
-Finding     → FindingInspector
-Multi       → MultiSelectionInspector
-Nothing     → EmptyInspector
+InspectorHostViewModel
+    ↓ SelectedPage
 ```
 
-### 15.1 Component Inspector
+Mappings iniciais:
+
+```text
+Component → ComponentInspector
+Net       → NetInspector
+Group     → GroupInspector
+Constraint→ ConstraintInspector
+Region    → RegionInspector
+Track     → TrackInspector
+Via       → ViaInspector
+Finding   → FindingInspector
+```
+
+Um `MultiSelectionInspector` deve tratar propriedades comuns e mixed values.
+
+---
+
+## 17. Component Inspector
 
 Seções candidatas:
 
 ```text
 GENERAL
 Reference
-Part number
-Value
+Part
 Footprint
-Provenance
+Value
 
 ELECTRICAL
 Role
@@ -725,7 +759,6 @@ Aggressor
 Susceptibility
 
 PLACEMENT
-Pose
 Side
 Rotation
 Region
@@ -741,70 +774,60 @@ CONSTRAINTS
 Required
 Preferred
 Suggested
-Violations
-```
 
-### 15.2 Net Inspector
-
-```text
-GENERAL
-Name
-Endpoints
-Group/class
-
-ELECTRICAL
-Type
-Voltage
-Current
-Frequency
-Bitrate/bandwidth
-Edge rate
-Aggressor
-Susceptibility
-
-ROUTING
-Width
-Priority
-Layers
-Length
-Vias
-Impedance/skew
-
-RELATIONS
-Sensitive-to
-Keep-away
-Differential pair
-Return-path requirements
-```
-
-### 15.3 Provenance
-
-Todo campo importante deve poder exibir:
-
-```text
+PROVENANCE
 Imported
-User Defined
-AI Inferred
+User-defined
+Deterministically inferred
+AI-inferred
 Derived
-Default
 Unknown
 ```
 
-A interface não deve fazer informação inferida parecer fato importado.
-
 ---
 
-## 16. Constraint Composer
-
-Painel direito dedicado a criação de regras.
-
-Diferentemente de um dialog esporádico, constraint authoring deve ficar visível e integrado ao workspace.
+## 18. Net Inspector
 
 Exemplo:
 
 ```text
-Create Relation
+NET: SW
 
+Electrical
+Type              Switching power
+Voltage           ...
+Current           4.5 A
+Frequency         500 kHz
+Edge rate         Fast
+
+EMI
+Aggressor         High
+Susceptibility    Low
+
+Routing
+Priority          Critical
+Width             derived/effective
+Layers            L1 preferred
+Vias              <= 1 preferred
+
+Relations
+Keep away from:
+ADC_INPUTS
+FEEDBACK_NETS
+XTAL
+```
+
+Valores devem mostrar effective source/provenance.
+
+---
+
+## 19. Constraint Composer
+
+Painel direito dedicado a criação de relações.
+
+Exemplo:
+
+```text
 FROM
 U17
 
@@ -812,164 +835,175 @@ TO
 ADC_GROUP
 
 Type
-[ Minimum separation ▼ ]
+Minimum separation
 
 Distance
-[ 10.00 ] mm
-
-Scope
-[ All relevant layers ▼ ]
+10.00 mm
 
 Enforcement
-(•) Required
-( ) Preferred
-( ) Optimization Goal
+Required
 
 Reason
-[ Switching regulator vs sensitive analog ]
-
-[ Add Constraint ]
+Switching regulator vs sensitive analog
 ```
 
-### 16.1 Source/target a partir da seleção
+A fonte/target podem vir da seleção atual.
 
-O Composer deve conseguir usar:
+---
 
-- primary selection;
-- current multi-selection;
-- grupos;
-- nets;
-- regions;
-- manual lookup/search.
+## 20. Suggestions no Constraint Composer
 
-### 16.2 Preview antes de commit
-
-Antes de adicionar a regra, o canvas pode mostrar:
-
-- halo de separação;
-- região proibida;
-- relation line;
-- affected objects;
-- possible existing conflicts.
-
-### 16.3 AI Suggestions
-
-O painel pode possuir tab:
+Possível tab:
 
 ```text
 Constraints | Suggestions
 ```
 
-Sugestões nunca entram silenciosamente nas constraints efetivas.
-
-Workflow:
+Exemplo:
 
 ```text
-Suggest
-→ Review
-→ Accept/Edit/Reject
-→ Commit as explicit rule
+Suggestions for U17
+
+☐ Keep CIN close to VIN/GND
+☐ Keep FB network away from SW
+☐ Minimize SW copper area
+☐ Keep L3 close to SW
+```
+
+Estados:
+
+```text
+AI Suggested
+Deterministically Suggested
+User Defined
+Imported
+Derived
+```
+
+Sugestão não entra silenciosamente como Required.
+
+---
+
+## 21. PCB Workspace
+
+Documento central:
+
+```text
+document.board
+```
+
+Pode coexistir futuramente com:
+
+```text
+document.constraint-graph
+document.candidate.<id>
+document.comparison.<id>
+document.routing-analysis.<id>
 ```
 
 ---
 
-## 17. Board Workspace
+## 22. Board header/toolbar local
 
-O Board Workspace é o documento central.
+Exemplo:
+
+```text
+[Select] [Pan] [Route] [Region]
+Layer: [All]
+View:  [Physical]
+
+Grid
+Courtyards
+Nets
+Routes
+Constraints
+
+Zoom 74% [Fit] [1:1]
+```
+
+---
+
+## 23. PcbViewportControl
+
+O canvas não pode representar cada track/via/pad como Avalonia `Control` individual.
 
 Estrutura:
 
 ```text
 BoardWorkspaceView
- ├── Workspace Header
- └── PcbViewportControl
-```
-
-Header inicial possível:
-
-```text
-[Select] [Pan] [Region] [Measure]
-Layer: [All ▼]
-View:  [Physical ▼]
-
-Grid          ✓
-Courtyards    ✓
-Nets          ✓
-Routes        ✓
-Constraints   ✓
-
-Zoom 74%   [Fit] [1:1]
-```
-
-Routing manual poderá adicionar ferramentas específicas depois.
-
----
-
-## 18. PcbViewportControl
-
-O canvas não deve representar cada entidade como um `Control` Avalonia.
-
-Evitar:
-
-```text
-TrackControl × 20,000
-ViaControl × 1,000
-PadControl × 3,000
-```
-
-Usar um renderer especializado:
-
-```text
+      ↓
 PcbViewportControl
       ↓
 IPcbRenderer
-      ↓
-render board state efficiently
 ```
 
-Entidades visuais:
+O renderer desenha em batches/layers:
 
-- board outline;
-- footprints;
-- pads;
-- courtyards;
-- tracks;
-- vias;
-- zones;
-- ratsnest;
-- groups/regions;
-- constraints;
-- halos;
-- reserved corridors;
-- congestion overlays;
-- findings;
-- selection;
-- transaction diffs.
-
-### 18.1 MVVM boundary
-
-ViewModel fornece estado de viewport e comandos de alto nível.
-
-O control/code-behind pode possuir lógica visual de:
-
-- pointer hit testing bridge;
-- drag gesture;
-- pan;
-- wheel zoom;
-- hover;
-- selection rectangle;
-- render invalidation;
-- coordinate transform.
-
-Mas a mutação do design deve virar command/transaction no Application/Core.
+```text
+board
+regions
+copper
+tracks
+vias
+pads
+footprints
+courtyards
+ratsnest
+overlays
+selection
+findings
+```
 
 ---
 
-## 19. View modes
+## 24. Renderer boundary
 
-A arquitetura deve aceitar diferentes projeções do mesmo BoardState.
+Criar abstração desde cedo:
 
-Planejadas:
+```text
+IPcbRenderer
+```
+
+Primeira implementação pode usar rendering customizado do Avalonia.
+
+Futuramente:
+
+```text
+AvaloniaDrawingRenderer
+GpuRenderer
+```
+
+sem alterar Domain/ViewModels.
+
+---
+
+## 25. Hit testing
+
+Hit testing não deve depender de milhares de controls.
+
+Fluxo:
+
+```text
+pointer screen coordinate
+      ↓
+viewport transform
+      ↓
+board coordinate
+      ↓
+spatial query/local render index
+      ↓
+exact hit test
+      ↓
+selection
+```
+
+O geometry/spatial engine local é fonte de verdade para hit testing físico.
+
+---
+
+## 26. View Modes
+
+Projetar desde cedo:
 
 ```text
 Physical
@@ -982,104 +1016,87 @@ Thermal
 Optimization Diff
 ```
 
-Nem todas precisam existir inicialmente.
+Nem todos precisam existir inicialmente.
 
 ### Physical
 
-Visão convencional da placa.
+Visão normal.
 
 ### Connectivity
 
-Enfatiza ratsnest e relações elétricas, reduzindo clutter de cobre conforme necessário.
+Destaca ratsnest/conectividade.
 
 ### Constraints
 
-Exibe:
-
-- minimum-separation halos;
-- required/preferred regions;
-- forbidden regions;
-- semantic relationships;
-- constraint violations.
+Destaca regiões, halos e relationships.
 
 ### Routing
 
-Enfatiza:
-
-- routes;
-- vias;
-- corridors;
-- unrouted nets;
-- layer assignment.
+Route guides, corridors e tracks.
 
 ### Congestion
 
-Exibe capacity/demand map por layer.
+Capacity/demand/hotspots derivados do global router.
 
 ### Optimization Diff
 
-Compara estados:
-
-```text
-U17 old → new
-C18 rotated
-N37 rerouted
-2 vias removed
-```
+Before/after de transaction/candidate.
 
 ---
 
-## 20. Overlays de constraints
+## 27. Constraint overlays
 
-Constraints precisam ser visíveis graficamente.
+Constraints precisam ser visualizáveis.
 
 Exemplos:
 
-### Separation halo
+- minimum-separation halo;
+- Required Region;
+- Preferred Region;
+- Forbidden Region;
+- routing corridor;
+- high-EMI area;
+- congestion overlay.
 
-```text
-       required 10 mm
-   ┌──────────────────┐
-   │                  │
-   │       U17        │
-   │                  │
-   └──────────────────┘
-```
-
-### Region
-
-```text
-Required Region
-Preferred Region
-Forbidden Region
-```
-
-### Routing resource
-
-```text
-Reserved Corridor
-Critical Corridor
-Capacity Hotspot
-```
-
-### EMI/semantics
-
-```text
-Aggressor region
-Sensitive object
-High-dv/dt copper
-Quiet region
-```
-
-O usuário deve poder ligar/desligar overlays para evitar poluição visual.
+Seleção de uma constraint deve ativar overlay correspondente e foco nos objetos afetados.
 
 ---
 
-## 21. Bottom Workbench
+## 28. Context menus
 
-Reaproveitar o conceito do MediaForge de um painel inferior com tabs internas.
+Component:
 
-Tabs iniciais:
+```text
+Focus
+Lock / Unlock
+Move to Group
+Assign Region
+Add Constraint
+Show Related Nets
+Suggest Constraints
+Analyze
+```
+
+Net:
+
+```text
+Highlight
+Add to Group
+Set Electrical Properties
+Add Constraint
+Show Endpoints
+Route Now
+Rip-up Route
+Analyze
+```
+
+Ações de tuning algorítmico de baixo nível não devem aparecer nesses menus comuns.
+
+---
+
+## 29. Bottom Workbench
+
+Tabs:
 
 ```text
 Constraints
@@ -1090,33 +1107,48 @@ Metrics
 Log
 ```
 
-### 21.1 Constraints
+Mesmo padrão de Tool que pode virar floating window se o usuário desejar.
 
-Tabela filtrável:
+---
+
+## 30. Constraints tab
+
+Tabela conceitual:
 
 ```text
-ID      Type       Source    Target       Rule                 Status
-C-001   Required   U17       ADC_GROUP    separation >=10mm   PASS
-C-002   Preferred  USB_PAIR  POWER        avoid overlap       WARN
+ID      Enforcement  Source      Target      Rule                 Status
+C-001   Required     U17         ADC_GROUP   separation >=10mm    PASS
+C-002   Preferred    USB_PAIR    POWER       avoid overlap        WARN
 ```
 
-### 21.2 Findings
+Clique centraliza objetos e abre Inspector.
+
+---
+
+## 31. Findings tab
+
+Exemplo:
 
 ```text
-HIGH   Feedback route near SW
+HIGH   FB route near SW
 MED    USB corridor congested
-LOW    U17 rotation could reduce vias
+LOW    U17 could rotate to reduce vias
 ```
 
-Selecionar finding deve:
+Finding selecionado:
 
-- atualizar selection;
-- destacar objetos;
-- opcionalmente focar viewport;
-- abrir FindingInspector;
-- mostrar repairs disponíveis.
+- canvas focus;
+- highlight;
+- Inspector;
+- evidence;
+- transaction history relacionada;
+- repair actions.
 
-### 21.3 Routing
+---
+
+## 32. Routing tab
+
+Exemplo:
 
 ```text
 62 nets
@@ -1128,12 +1160,26 @@ Reason: corridor blocked
 Blockers: U17, C42
 ```
 
-### 21.4 Optimization
+Detalhes podem incluir:
+
+```text
+required passage
+available passage
+alternate layers
+rip-up attempts
+placement-repair escalation
+```
+
+---
+
+## 33. Optimization tab/tool
+
+Exemplo:
 
 ```text
 Run #14
-Iteration 3821
-Candidate 247
+Iteration 3,821
+Candidate #247
 
 Hard violations      0
 Wirelength           1284 mm
@@ -1143,193 +1189,167 @@ Critical congestion  0.41
 Best candidate       #221
 ```
 
-### 21.5 Metrics
-
-Histórico e comparação entre candidates/runs.
-
-### 21.6 Log
-
-Import, engine, router, AI/tool, error e diagnostics relevantes.
+O mesmo ViewModel deve conseguir existir como tab inferior ou Tool destacado.
 
 ---
 
-## 22. Optimization Tool
+## 34. Algorithm details versus user explanation
 
-Optimization pode começar como tab do Workbench, mas sua arquitetura deve permitir destacá-la como `Tool` real.
-
-Exemplo:
+O painel comum mostra engineering intent/outcome:
 
 ```text
-OPTIMIZATION
-
-State
-Running
-
-Phase
-Local repair
-
-Current problem
-N137 cannot route
-
-Neighborhood
-U17 / C41 / C42 / L3
-
-Candidates tested
-1,842
-
-Best delta
--17.2%
-
-[Pause] [Stop] [Keep Best]
+Optimizing local congestion near U17
+Testing alternative placements and routes
+Best candidate improved corridor capacity by 18%
 ```
 
-A UI não deve congelar enquanto o optimizer roda.
+Diagnostics/Benchmark mode pode mostrar:
 
-Progress/event streams devem ser desacoplados do physical-design execution thread.
+```text
+LNS neighborhood size
+SA temperature
+A* expanded nodes
+present/history congestion factor
+grid resolution
+```
+
+Essa separação preserva usabilidade sem esconder informação necessária para desenvolvimento/auditoria.
 
 ---
 
-## 23. Review Mode
+## 35. Review Mode
 
-O produto não termina quando o optimizer encontra um candidate.
+Review precisa ser workflow explícito.
 
-A interface precisa permitir revisão explícita.
-
-Recursos:
-
-- before/after;
-- candidate comparison;
-- transaction diff;
-- resolved findings;
-- new regressions;
-- score breakdown;
-- constraint status delta;
-- move/routing explanations;
-- accept/reject candidate;
-- revert specific user edits quando suportado.
-
-Documento candidato:
+Superfícies:
 
 ```text
-document.comparison.<id>
+before / after
+diff overlays
+transaction actions
+metric deltas
+resolved findings
+new regressions
+AI explanation
+engine evidence
 ```
 
-Pode mostrar dois candidates ou baseline versus candidate.
+Decisões possíveis:
+
+```text
+Accept
+Reject
+Repair
+Rollback
+Keep as alternate candidate
+```
 
 ---
 
-## 24. Context menus
+## 36. Candidate comparison
 
-Navigator e canvas devem compartilhar actions sem duplicar lógica.
-
-### Component
+Documents podem mostrar:
 
 ```text
-Focus
-Lock / Unlock
-Move to Group...
-Assign Region...
-Add Constraint...
-Show Related Nets
-Show Related Components
-Suggest Constraints
-Analyze
+Candidate A
+Candidate B
 ```
 
-### Net
+Comparar:
 
-```text
-Highlight
-Add to Group...
-Set Electrical Properties...
-Add Constraint...
-Show Endpoints
-Route Now
-Rip-up Route
-Analyze
-```
-
-### Finding
-
-```text
-Focus
-Inspect
-Show Evidence
-Attempt Repair
-Ignore/Accept Risk (when allowed)
-```
-
-Actions chamam commands/application services comuns.
+- validity;
+- routing completion;
+- vias;
+- trace length;
+- congestion;
+- critical loops;
+- constraints;
+- findings;
+- score breakdown.
 
 ---
 
-## 25. Undo / Redo
+## 37. Undo/Redo
 
-O Place&Router possui vantagem arquitetural importante: o modelo já prevê `DesignTransaction`.
-
-A UI manual deve usar a mesma infraestrutura.
+UI manual deve usar a mesma infraestrutura de `PhysicalDesignTransaction` do optimizer.
 
 Exemplos:
 
 ```text
-MoveComponentTransaction
-RotateComponentTransaction
-CreateConstraintTransaction
-EditNetPropertiesTransaction
-CreateGroupTransaction
-MoveRegionTransaction
+MoveComponent
+CreateConstraint
+EditNetProperties
+CreateGroup
+MoveRegion
 ```
 
-Consequências:
-
-- Ctrl+Z/Ctrl+Y naturais;
-- audit trail comum;
-- UI e optimizer usam o mesmo mutation model;
-- diff/review é consistente;
-- autosave/recovery ficam mais simples no futuro.
-
----
-
-## 26. Toolbar
-
-A toolbar principal deve permanecer curta.
-
-Ações candidatas:
+Isso permite:
 
 ```text
-New/Open/Save
-Import/Refresh Design
-Undo/Redo
-Board Setup
-Readiness
-Optimize
-Pause/Stop (contextual)
-Review Best Candidate
+Undo
+Redo
+Replay
+Audit
 ```
 
-Ferramentas específicas de canvas ficam preferencialmente no header do Board Workspace, evitando uma toolbar global gigantesca.
+sem criar um segundo modelo de mutação só para UI.
 
 ---
 
-## 27. Status Bar
+## 38. Toolbar global
 
-A status bar deve fornecer contexto operacional permanente.
+Categorias iniciais:
+
+```text
+File
+Import
+Board
+Constraints
+Optimize
+Review
+Export
+```
+
+A toolbar deve mostrar actions frequentes, não cada possibilidade avançada.
+
+---
+
+## 39. Perfis de otimização
+
+A UI comum oferece intents compreensíveis:
+
+```text
+Balanced
+Routing-first
+Compact
+Low-via
+EMI-conscious
+Manufacturing-conservative
+```
+
+O mapping exato entre profile e parâmetros pertence ao engine e é versionado.
+
+Advanced settings podem existir, mas não são requisito para uma run normal.
+
+---
+
+## 40. Status bar
 
 Idle:
 
 ```text
 Ready
-│ Board 100×70 mm
+│ Board 100×70mm
 │ 2 layers
 │ 47 components
 │ 62 nets
 │ 58/62 routed
 │ DRC 0
-│ Findings 3
+│ Warnings 3
 │ Zoom 74%
 ```
 
-Optimization:
+Run:
 
 ```text
 Optimizing
@@ -1337,75 +1357,34 @@ Optimizing
 │ Iteration 3821
 │ Hard violations 0
 │ 4 nets pending
-│ Best score ...
 ```
 
-Mensagens longas pertencem a diagnostics/log, não à status bar.
+Cloud operation, quando ativa, deve poder aparecer discretamente como estado auditável sem transformar a interface em chat-centric.
 
 ---
 
-## 28. Keyboard e shortcuts
+## 41. Readiness UX
 
-Arquitetura de shortcuts deve ser centralizada.
+Readiness não é um questionário.
 
-Primeiro conjunto provável:
+Deve separar:
 
 ```text
-Ctrl+N        New
-Ctrl+O        Open
-Ctrl+S        Save
-Ctrl+Z        Undo
-Ctrl+Y        Redo
-F             Fit board/selection (context-dependent)
-Esc           cancel current gesture/tool
-Delete        context-dependent delete where legal
-Space/Middle  pan gesture, depending on final UX
+READY
+READY WITH NON-BLOCKING UNKNOWNS
+NEEDS N MATERIAL INPUTS
+CONSTRAINT CONFLICT
 ```
 
-Shortcuts não devem estar espalhados em code-behind sem um serviço/registry comum.
+Quando houver material input pendente, abrir uma fila curta de perguntas explicadas, não uma property grid inteira.
 
 ---
 
-## 29. Acessibilidade e automation IDs
+## 42. AI presence na interface
 
-O MediaForge já adotou Automation IDs e accessible names em superfícies importantes. Place&Router deve manter esse padrão desde cedo.
+A IA não é o paradigma central da UI.
 
-Objetivos:
-
-- automated UI tests estáveis;
-- keyboard navigation;
-- accessible names;
-- test selectors que não dependem de texto localizado;
-- suporte futuro a screen readers onde aplicável.
-
-IDs devem ser estáveis e semânticos:
-
-```text
-design-navigator.search
-board-workspace.viewport
-constraint-composer.add
-optimization.start
-workbench.findings
-```
-
----
-
-## 30. Tema e estilo visual
-
-A aplicação deve ter estética profissional de IDE/CAD, não de “chat de IA”.
-
-Características:
-
-- dark theme inicialmente;
-- densidade informacional alta, mas organizada;
-- typography consistente;
-- panels discretos;
-- accent usado para seleção/ação, não para decorar tudo;
-- status severity claro;
-- grids e tables compactos;
-- pouca ornamentação.
-
-A IA aparece como capacidade integrada:
+Ações podem aparecer como:
 
 ```text
 Suggest
@@ -1413,436 +1392,408 @@ Analyze
 Optimize
 Explain
 Repair
+Review
 ```
 
-Não como paradigma central:
+Uma interface conversacional pode existir futuramente, mas não substitui:
 
 ```text
-Chat with your PCB
-```
-
-Uma interface conversacional pode existir no futuro como superfície auxiliar.
-
----
-
-## 31. Localization
-
-Strings de produto não devem ficar espalhadas diretamente em XAML/ViewModels desde a fundação.
-
-Mesmo que pt-BR seja a primeira linguagem operacional, a arquitetura deve aceitar localization.
-
-Textos de:
-
-- menus;
-- panel titles;
-- constraint types;
-- statuses;
-- dialogs;
-- findings;
-- AI explanation templates;
-
-precisam ser externalizáveis.
-
-IDs internos e schema permanecem language-neutral.
-
----
-
-## 32. Performance da UI
-
-Place&Router pode trabalhar com placas grandes. A UI deve ser desenhada para isso desde cedo.
-
-### 32.1 Não materializar tudo como Controls
-
-Canvas usa renderer especializado.
-
-### 32.2 Virtualização
-
-Listas/tabelas grandes devem usar controls/estruturas virtualizadas quando possível:
-
-- components;
-- nets;
-- constraints;
-- findings;
-- logs;
-- candidates.
-
-### 32.3 Atualizações incrementais
-
-Uma iteração do optimizer não deve forçar rebuild completo de todas as collections da UI.
-
-Preferir:
-
-- delta notifications;
-- throttling/coalescing;
-- snapshot rate configurável para visualização;
-- background computation;
-- UI-thread dispatch apenas para projeções necessárias.
-
-### 32.4 Canvas durante optimization
-
-O engine pode produzir centenas/milhares de candidates por segundo. Não devemos tentar renderizar cada um.
-
-A UI recebe:
-
-- best/current candidate snapshots em frequência limitada;
-- meaningful transactions;
-- metrics stream agregado.
-
----
-
-## 33. Responsabilidades do code-behind
-
-Permitido:
-
-- pointer capture;
-- drag/resize visual;
-- native Window events;
-- screen/monitor queries;
-- DPI/native integration;
-- focus edge cases;
-- specialized rendering bridge.
-
-Não permitido:
-
-- constraint rules;
-- routing logic;
-- optimization strategy;
-- project mutation sem transaction;
-- model-provider calls;
-- import/export business logic.
-
----
-
-## 34. Responsabilidades dos ViewModels
-
-ViewModels devem:
-
-- projetar estado para binding;
-- expor commands;
-- representar selection/context;
-- converter domain state em labels/list rows/editable properties;
-- coordenar dialogs/workspace através de services apropriados.
-
-Não devem duplicar o domain model inteiro desnecessariamente.
-
-Quando um modelo canônico possuir campos que a UI ainda não representa, eles precisam permanecer preservados no projeto.
-
----
-
-## 35. Workspace state versus design state
-
-Separar rigorosamente:
-
-### Design state
-
-Pertence ao projeto:
-
-```text
-components
-nets
-constraints
-regions
 board
-routes
-user design metadata
+navigator
+inspector
+constraints
+workbench
 ```
 
-### Workspace state
-
-Pertence ao usuário/app:
+A UI deve distinguir:
 
 ```text
-panel positions
-floating windows
-active tabs
-zoom preferences
-visible overlays
-search/filter preferences
-window bounds
+Local computation
+Cloud AI operation
 ```
 
-Mover o Inspector para outro monitor nunca deve sujar o arquivo PRDX/design.
+quando isso for relevante para privacidade/auditoria.
 
 ---
 
-## 36. Plano de implementação da interface
+## 43. Settings
+
+Settings de usuário/aplicação incluem:
+
+```text
+language
+theme
+workspace layout
+AI provider credentials/config
+optimization profile defaults
+advanced/diagnostic mode
+```
+
+Secrets não entram no project/PRDX.
+
+---
+
+## 44. Localization
+
+Strings visíveis devem ser externalizadas desde cedo.
+
+O idioma inicial pode ser pt-BR, mas não hardcode textos funcionais críticos em ViewModels.
+
+IDs/enums/domain names permanecem estáveis e independentes de tradução.
+
+---
+
+## 45. Accessibility e automation
+
+Elementos primários devem possuir:
+
+- stable AutomationIds;
+- accessible names;
+- keyboard navigation;
+- focus states;
+- contrast adequado.
+
+Isso também facilita Avalonia Headless/UI automation tests.
+
+---
+
+## 46. Keyboard e shortcuts
+
+Baseline:
+
+```text
+Ctrl+Z Undo
+Ctrl+Y Redo
+Ctrl+S Save
+Ctrl+O Open
+F           Fit board
++/-         Zoom
+Delete      remove selected editable object/action where safe
+Esc         cancel current tool/selection mode
+```
+
+Shortcuts devem passar por serviço/command routing, não lógica espalhada em Views.
+
+---
+
+## 47. Threading
+
+UI thread nunca executa optimizer/routing pesado.
+
+Fluxo:
+
+```text
+UI command
+   ↓
+Application async operation
+   ↓
+engine worker/tasks
+   ↓
+immutable/snapshot progress
+   ↓
+UI projection update
+```
+
+Progress updates devem ser throttled/coalesced para não transformar a render thread em bottleneck.
+
+---
+
+## 48. Run progress
+
+Não publicar toda micro-mutação de milhares de candidates para a UI.
+
+Publicar snapshots úteis:
+
+```text
+phase
+iteration
+best candidate
+active neighborhood
+metrics
+current routing failure
+findings count
+```
+
+Debug/benchmark mode pode coletar detalhe maior em log, sem redesenhar o canvas a cada move.
+
+---
+
+## 49. Workspace state versus design state
+
+Não misturar:
+
+```text
+PhysicalDesignState
+```
+
+com:
+
+```text
+Workspace/UI state
+```
+
+Exemplos de workspace state:
+
+- dock positions;
+- zoom;
+- selected tab;
+- filters;
+- panel visibility.
+
+Exemplos de design state:
+
+- component pose;
+- constraint;
+- route;
+- region;
+- property value.
+
+Salvar layout de UI nunca altera PRDX design semantics.
+
+---
+
+## 50. Plano de implementação
 
 ### UI-01 — Shell e docking
 
-Implementar:
-
 - MainWindow;
-- custom title bar;
+- custom titlebar;
 - toolbar;
-- status bar;
+- statusbar;
 - `PlaceRouterDockFactory`;
-- `DockControl`;
-- Tool/Document IDs;
-- real floating windows;
+- tool/document IDs;
+- floating real;
 - redock;
 - reset layout;
-- layout persistence;
-- safe multi-monitor restore.
-
-Critério:
-
-> todos os painéis default podem ser redimensionados, movidos, destacados, reencaixados e restaurados sem perder o workspace.
+- monitor-safe persistence.
 
 ### UI-02 — Design Navigator
 
-Implementar:
-
-- Components/Nets/Groups/Rules tabs;
+- tabs;
 - search;
 - filters;
 - selection;
 - multi-selection;
 - badges;
-- context menus;
-- bulk operation hooks.
+- provenance;
+- missing-data severity.
 
-### UI-03 — Selection infrastructure
+### UI-03 — Inspector architecture
 
-Implementar antes de proliferar painéis:
+- host;
+- component/net/group/constraint/region;
+- mixed values;
+- provenance;
+- bulk edit.
 
-- `SelectionState`;
-- `SelectionCoordinator`;
-- primary + multi selection;
-- canvas ↔ navigator ↔ inspector synchronization;
-- focus/highlight intents.
+### UI-04 — PCB Workspace foundation
 
-### UI-04 — Inspector architecture
-
-Implementar:
-
-- `InspectorHostViewModel`;
-- Empty;
-- Component;
-- Net;
-- Group;
-- Constraint;
-- Region;
-- MultiSelection inspectors;
-- provenance indicators.
-
-### UI-05 — PCB Workspace base
-
-Implementar:
-
-- Board document;
-- `PcbViewportControl`;
-- coordinate transform;
+- viewport;
+- renderer;
 - pan/zoom;
-- fit;
-- layer visibility;
+- layers;
 - board outline;
-- footprints/pads;
-- selection/hit testing;
-- ratsnest.
+- footprint/pad rendering;
+- selection/hit testing.
 
-### UI-06 — Constraint Composer
+### UI-05 — Constraint Composer
 
-Implementar:
-
-- source/target selectors;
-- common constraint types;
+- source/target;
+- relation type;
 - Required/Preferred/Goal;
-- distance/layer scope;
-- reason;
-- preview overlay;
-- conflict preview;
-- commit through transaction.
+- preview;
+- provenance;
+- suggestions.
 
-### UI-07 — Board Setup
+### UI-06 — Board/Manufacturing Setup
 
-Implementar UI para:
-
-- board dimensions/shape;
+- board;
 - stackup;
-- material;
-- copper weight;
-- manufacturing profile;
+- profiles;
 - keepouts;
-- fixed mechanical regions.
+- mechanical regions.
 
-### UI-08 — Bottom Workbench
+### UI-07 — Readiness + contextual questions
 
-Implementar tabs:
+- automatic enrichment status;
+- blocking/non-blocking unknowns;
+- ranked questions;
+- safe fallbacks;
+- conflict navigation.
 
-- Constraints;
-- Findings;
-- Routing;
-- Optimization;
-- Metrics;
-- Log.
+### UI-08 — Workbench
+
+- constraints;
+- findings;
+- routing;
+- metrics;
+- logs.
 
 ### UI-09 — Optimization UI
 
-Implementar:
-
-- readiness view;
-- start;
-- running state;
-- current phase/problem;
-- progress/metrics;
+- profiles;
+- progress;
+- candidates;
+- current problem;
 - pause/stop;
-- best candidate;
-- candidate navigation.
+- diagnostics mode.
 
-### UI-10 — Review UI
+### UI-10 — Review Mode
 
-Implementar:
-
-- baseline vs candidate;
 - before/after;
-- transaction diff;
+- diff;
 - regressions;
-- findings delta;
-- score decomposition;
-- explanations;
-- accept/reject.
+- candidate compare;
+- accept/reject/repair.
 
-### UI-11 — Advanced visualization
+### UI-11 — Workspace persistence
 
-Implementar progressivamente:
-
-- constraint overlays;
-- routing corridors;
-- congestion;
-- EMI proxies;
-- thermal proxies;
-- optimization diffs.
-
-### UI-12 — Workspace persistence hardening
-
-Cobrir:
-
-- floating windows;
-- monitor disconnect;
-- DPI/resolution change;
-- active tabs;
+- floating state;
+- monitors;
 - panel visibility;
-- overlay preferences;
-- restore defaults;
-- visual QA em resoluções representativas.
+- active tabs;
+- viewport preferences.
+
+### UI-12 — Accessibility / visual QA
+
+- headless tests;
+- automation IDs;
+- keyboard;
+- common resolutions;
+- multi-monitor native checks.
 
 ---
 
-## 37. Testes da UI
-
-A arquitetura deve permitir Avalonia Headless para fluxos que não dependam de renderização/native window real.
-
-Categorias:
+## 51. Test strategy
 
 ### ViewModel tests
 
+Sem Avalonia quando possível.
+
+### Avalonia Headless
+
+- DataTemplates;
 - commands;
-- selection propagation;
-- inspector choice;
-- filtering;
-- constraint composer state;
-- readiness projection.
+- selection;
+- panel content;
+- workflow smoke tests.
 
-### Layout state tests
+### Docking tests
 
-- invalid values;
-- missing monitor;
-- bounds clamp;
-- persistence round-trip;
-- defaults.
+- layout creation;
+- reset;
+- redock;
+- visibility;
+- floating-state normalization.
 
-### Headless UI tests
+### Native tests
 
-- shell creation;
-- DataTemplate resolution;
-- primary workflows;
-- Automation IDs;
-- keyboard commands.
-
-### Native/visual QA
-
-- dock/undock;
-- floating windows;
-- multi-monitor;
+- real floating windows;
+- taskbar;
+- multiple monitors;
 - DPI;
-- resize;
-- dark theme;
-- common screen sizes;
-- canvas performance.
+- unplugged monitor restore.
+
+### Visual QA
+
+Resoluções mínimas:
+
+```text
+1366×768
+1920×1080
+2560×1440
+```
+
+Também testar scaling/DPI diferentes.
 
 ---
 
-## 38. O que deve ser reaproveitado conceitualmente do MediaForge
+## 52. O que reaproveitar do MediaForge
 
-Reaproveitar:
+Reaproveitar conceitualmente:
 
-1. Avalonia + MVVM;
-2. Dock.Avalonia family;
-3. Factory programática de layout;
-4. distinção `Tool`/`Document`;
-5. real floating windows;
-6. multi-monitor persistence e normalization;
-7. App-level DataTemplates para dock contexts;
-8. InspectorHost contextual;
-9. bottom workbench com tabs internas;
-10. Selection service/coordinator;
-11. custom titlebar + toolbar + statusbar;
-12. code-behind restrito a comportamento visual/window;
-13. accessibility/automation IDs;
-14. headless UI testing.
+- Avalonia/MVVM separation;
+- Dock.Avalonia architecture;
+- Factory-based layout;
+- real floating tools;
+- monitor-safe persistence;
+- ViewModel→View DataTemplates;
+- central Selection Service;
+- contextual Inspector;
+- Bottom Workbench pattern;
+- thin Window code-behind;
+- stable automation IDs;
+- headless/visual QA strategy.
 
 ---
 
-## 39. O que não deve ser copiado literalmente do MediaForge
+## 53. O que não copiar do MediaForge
 
-1. O conteúdo/semântica de Navigation, Production e Scene editing.
-2. Um ShellViewModel excessivamente centralizador.
-3. Qualquer dependência específica do media engine.
-4. O canvas de Scene editing, porque PCB possui escala e densidade gráfica diferentes.
-5. As versões exatas dos pacotes sem nova avaliação.
-6. Proporções fixas do layout sem novo visual QA.
-7. Patterns criados para Preview GPU/native hosting que não sejam relevantes à PCB.
+Não copiar cegamente:
 
----
+- Studio-specific ViewModels;
+- media/output concepts;
+- preview/native-host infrastructure;
+- shell VM excessivamente centralizado;
+- dimensões/proporções sem novo QA;
+- visual styling idêntico;
+- assumption de que todo missing property precisa de editor manual.
 
-## 40. Princípios invariantes atuais da UI
-
-1. A aplicação é desktop-first.
-2. Avalonia + MVVM é a direção inicial.
-3. O engine permanece headless e sem dependência de Avalonia.
-4. O workspace segue paradigma IDE/CAD.
-5. Painéis auxiliares são dockables reais.
-6. Floating panels são janelas reais e multi-monitor.
-7. Layout do workspace é persistido fora do design da PCB.
-8. Board Workspace é a superfície central.
-9. Navigator, canvas, Inspector e Composer compartilham um Selection model central.
-10. Multi-selection é requisito básico.
-11. Constraint authoring é uma superfície principal, não um recurso escondido.
-12. Inspector é contextual.
-13. O canvas usa renderização especializada, não milhares de Avalonia Controls.
-14. UI e optimizer usam o mesmo modelo de transactions para mutações de design.
-15. AI é capability integrada, não o paradigma de navegação da aplicação.
-16. Findings, regressions e explanations são first-class na UI.
-17. O usuário deve conseguir revisar o que o optimizer fez antes de aceitar um candidate.
-18. A interface precisa permanecer utilizável durante processamento pesado.
+Place&Router é CAD/EDA e exige seleção espacial, constraint overlays, candidate comparison, routing diagnostics e zero-tuning muito mais fortes.
 
 ---
 
-## 41. Próximas decisões a formalizar por ADR
+## 54. Critérios de aceite da arquitetura UI
 
-Quando a implementação da UI se aproximar, criar ADRs específicos para:
+A arquitetura de UI está adequada quando:
 
-- versão de .NET;
-- versão de Avalonia;
-- versão/viabilidade de Dock.Avalonia;
-- renderer inicial do `PcbViewportControl`;
-- layout serialization strategy;
-- localization framework;
-- dialog/window service;
-- DataGrid/Tree control strategy;
-- virtualização de grandes coleções;
-- threading/event delivery do optimizer para UI;
-- keyboard/shortcut service;
-- theme/resource organization.
+1. engine funciona sem Avalonia;
+2. board workspace não depende do Dock internamente;
+3. Tools podem destacar para janelas reais;
+4. layout sobrevive a mudanças de monitor;
+5. seleção sincroniza todas as superfícies;
+6. multi-selection funciona desde cedo;
+7. Inspector é contextual;
+8. constraints são visualizáveis no board;
+9. run pode ser acompanhada sem bloquear UI;
+10. candidate/regression diff é navegável;
+11. usuário comum não precisa tunar algoritmos;
+12. missing data só interrompe quando materialmente necessário;
+13. local/cloud boundaries são auditáveis;
+14. lógica de produto não vive em code-behind.
 
-Este documento fixa a arquitetura de produto e workspace. Os ADRs fixarão escolhas concretas de implementação conforme forem validadas.
+---
+
+## 55. Decisões ainda abertas
+
+- versão final de .NET/Avalonia na solução inicial;
+- tema visual final;
+- renderer Avalonia inicial versus GPU desde cedo;
+- package escolhido para icons;
+- workspace profiles múltiplos;
+- engine in-process versus processo separado;
+- advanced property-grid implementation;
+- eventual chat surface.
+
+Essas decisões não impedem o shell/architecture definidos aqui.
+
+---
+
+## 56. Princípio final
+
+Place&Router deve parecer e funcionar como uma **ferramenta de engenharia CAD/EDA profissional**, não como um formulário técnico nem como um chat que por acaso desenha PCB.
+
+O usuário opera sobre objetos reais:
+
+```text
+components
+nets
+groups
+regions
+constraints
+routes
+findings
+candidates
+```
+
+O software usa processamento local e IA para reduzir o trabalho necessário para configurar e otimizar esses objetos, sem esconder a fonte de verdade física nem exigir conhecimento dos parâmetros internos dos algoritmos.
