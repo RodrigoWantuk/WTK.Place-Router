@@ -10,6 +10,8 @@ A tese mais importante a provar é:
 
 > um sistema consegue modificar iterativamente placement e routing como um único estado físico, detectar consequências/regressões e reorganizar decisões anteriores até alcançar um design válido e progressivamente melhor.
 
+> **Nota de implementação:** este roadmap descreve dependências e capacidades. A especificação detalhada de quais algoritmos locais entram em cada estágio está em [`10-Processamento-Local-e-Algoritmos-Deterministicos.md`](10-Processamento-Local-e-Algoritmos-Deterministicos.md). As fases abaixo não devem ser interpretadas como waterfall rígido; workstreams podem avançar em paralelo quando seus contracts mínimos estiverem disponíveis.
+
 ## 2. Primeira meta: construir o mundo antes do agente
 
 Antes de conectar um LLM, precisamos conseguir:
@@ -78,7 +80,7 @@ PlaceRouter.Experiments
 - Footprints;
 - Pads;
 - Nets;
-- PhysicalState;
+- PhysicalDesignState;
 - Regions;
 - Groups;
 - transactions/diffs.
@@ -182,6 +184,8 @@ Critérios:
 - distâncias reproduzíveis;
 - nenhuma dependência de EDA.
 
+Detalhamento v0.1 correspondente: LE-01/LE-02 do documento `10`.
+
 ### Fase 2 — Modelo canônico de design
 
 Implementar:
@@ -194,7 +198,7 @@ Implementar:
 - Region;
 - Board;
 - Stackup;
-- PhysicalState;
+- PhysicalDesignState;
 - provenance/Unknown.
 
 Criar schema PRDX inicial.
@@ -234,6 +238,8 @@ Depois:
 - optimization goals;
 - conflict validation.
 
+Detalhamento v0.1 correspondente: LE-03 do documento `10`.
+
 ### Fase 5 — Transactions e diff
 
 Implementar:
@@ -268,9 +274,13 @@ Métricas:
 - basic congestion grid;
 - reserved capacity.
 
+Depois evoluir para RMST/RSMT quando o candidate funnel exigir mais fidelidade.
+
 Objetivo:
 
 > distinguir rapidamente placements obviamente ruins de plausíveis.
+
+Detalhamento v0.1 correspondente: LE-05 do documento `10`.
 
 ### Fase 7 — Global routing / corridor reservation
 
@@ -280,9 +290,12 @@ Criar um global router capaz de:
 - consumir capacidade por layer;
 - detectar hotspots;
 - estimar vias/layer transitions;
-- reportar bloqueadores.
+- reportar bloqueadores;
+- usar negociação de congestionamento para evitar decisões greedy permanentes.
 
 Placement começa a receber routing feedback real.
+
+Detalhamento v0.1 correspondente: LE-07 do documento `10`.
 
 ### Fase 8 — Placement search determinístico
 
@@ -298,11 +311,14 @@ Usar inicialmente:
 
 - LNS;
 - Simulated Annealing;
-- heurísticas orientadas por conectividade/semântica simples.
+- heurísticas orientadas por conectividade/semântica simples;
+- candidate funnel multi-fidelity.
 
 Critério principal:
 
 > otimizar um board pequeno reduzindo custo sem violar Required constraints.
+
+Detalhamento v0.1 correspondente: LE-06/LE-08 do documento `10`.
 
 ### Fase 9 — Detailed routing incremental
 
@@ -310,6 +326,8 @@ Criar primeira versão de route geometry.
 
 Objetivos:
 
+- pin-access analysis;
+- A* 2.5D como search inicial;
 - rotear nets simples;
 - respeitar width/clearance;
 - via/layer rules;
@@ -318,6 +336,8 @@ Objetivos:
 - reportar motivo de failure.
 
 Não é necessário começar com push-and-shove sofisticado.
+
+Detalhamento v0.1 correspondente: LE-09/LE-10 do documento `10`.
 
 ### Fase 10 — Joint place/route repair loop
 
@@ -352,9 +372,12 @@ Formalizar:
 - new findings;
 - degraded metrics;
 - unchanged constraints;
-- event-driven suites.
+- event-driven suites;
+- dependency-driven incremental recomputation.
 
 Adicionar L0/L1/L2 determinísticos.
+
+Detalhamento v0.1 correspondente: LE-11 do documento `10`.
 
 ### Fase 12 — Constraint Workspace GUI
 
@@ -372,9 +395,12 @@ Construir interface para:
 - regions;
 - constraint authoring;
 - conflicts;
-- readiness report.
+- readiness report;
+- perguntas automáticas apenas para unknowns materialmente necessários.
 
 A GUI não deve criar lógica paralela; tudo chama o mesmo core.
+
+O shell/docking pode ser implementado em paralelo bem antes desta fase funcional estar completa.
 
 ### Fase 13 — Semantics
 
@@ -391,7 +417,9 @@ Adicionar:
 - differential pairs;
 - power loops.
 
-Inicialmente parte pode ser informada manualmente.
+Antes da IA, executar deterministic enrichment por nomes/topologia e preservar `Unknown` quando a evidência não for suficiente.
+
+Detalhamento v0.1 correspondente: LE-04 do documento `10`.
 
 ### Fase 14 — Agent tool layer
 
@@ -409,7 +437,7 @@ Criar test harness sem depender da GUI.
 
 ### Fase 15 — Primeiro reasoning LLM
 
-Adicionar provider abstraction e um modelo generalista forte.
+Adicionar provider abstraction e DeepSeek como provider inicial conforme ADR-0001.
 
 Primeiras tarefas:
 
@@ -422,6 +450,8 @@ Primeiras tarefas:
 - sugerir repair.
 
 Não dar ao LLM autoridade de DRC.
+
+Detalhamento de fronteira: documento `08`; pré-requisito local: LE-12 do documento `10`.
 
 ### Fase 16 — Reviews L3–L7
 
@@ -496,7 +526,8 @@ O conjunto deve conter dependências reais e não apenas nets aleatórias.
 
 - usuário consegue definir grupos e relações visualmente;
 - Required/Preferred/Goals são distintos;
-- conflicts óbvios são detectados antes da run.
+- conflicts óbvios são detectados antes da run;
+- campos Unknown não geram formulário em massa quando não são materialmente necessários.
 
 ### Placement
 
@@ -599,6 +630,16 @@ human review findings
 
 Não existe uma única métrica suficiente.
 
+Também medir correlação entre estágios de fidelidade:
+
+```text
+HPWL/RMST/RSMT estimate
+        vs
+actual detailed-route quality
+```
+
+para saber se o fast evaluator está realmente filtrando bons candidates.
+
 ## 10. Baselines
 
 Comparações úteis:
@@ -608,7 +649,8 @@ Comparações úteis:
 - optimizer without routing awareness;
 - optimizer with provisional routing;
 - optimizer with joint repair;
-- optimizer + LLM agent.
+- optimizer + LLM agent;
+- external PCB autorouter benchmark quando o formato e as regras forem comparáveis.
 
 Isso permite medir exatamente qual camada agrega valor.
 
@@ -669,142 +711,38 @@ Quando houver volume suficiente, isso pode treinar modelos especializados para:
 - placement refinement;
 - failure prediction.
 
-Esse aprendizado é otimização futura, não requisito de partida.
+Esse caminho só deve ser considerado quando benchmarks mostrarem que os algoritmos determinísticos + LLM ainda possuem bottlenecks onde aprendizado traz benefício mensurável.
 
-## 14. Uso de projetos reais para teste
+## 14. Artefatos obrigatórios de cada experimento
 
-É desejável testar com placas próprias ou projetos cuja licença permita uso.
-
-Se no futuro designs externos forem usados para treinamento, provenance/licenciamento precisam ser tratados explicitamente.
-
-A arquitetura de casos internos deve registrar origem e autorização de uso.
-
-## 15. Riscos técnicos principais
-
-### 15.1 Search space explosivo
-
-Mitigações:
-
-- hierarchical regions;
-- action filtering;
-- neighborhoods;
-- coarse-to-fine evaluation;
-- locks/freeze;
-- global routing proxies.
-
-### 15.2 Evaluator barato pouco correlacionado com routing real
-
-Mitigações:
-
-- benchmark fast metrics contra detailed route outcomes;
-- melhorar proxy progressivamente;
-- usar expensive evaluation nos finalistas.
-
-### 15.3 LLM gera reasoning plausível mas inútil
-
-Mitigações:
-
-- tools;
-- structured state;
-- measurable outcomes;
-- benchmarks por task;
-- deterministic authority;
-- adversarial review.
-
-### 15.4 Constraint explosion
-
-Mitigações:
-
-- groups;
-- inheritance;
-- templates/profiles;
-- bulk editing;
-- AI suggestions;
-- provenance.
-
-### 15.5 Interoperabilidade insuficiente
-
-Mitigações:
-
-- canonical model;
-- loss diagnostics;
-- adapter architecture;
-- começar com um EDA e ampliar.
-
-### 15.6 Performance
-
-Mitigações:
-
-- incremental recomputation;
-- spatial indexing;
-- candidate deltas;
-- multi-fidelity evaluation;
-- parallel candidate evaluation futuramente.
-
-## 16. Decisões que não precisam ser fechadas agora
-
-Podem permanecer experimentais:
-
-- linguagem principal do engine;
-- framework final da GUI;
-- algoritmo exato do detailed router;
-- grid resolution do global router;
-- LLM provider/model;
-- MCTS ou outra busca de longo horizonte;
-- solver de SI/PI/thermal;
-- nome definitivo PRDX;
-- estratégia comercial/local-first/open-core.
-
-Essas decisões não devem bloquear o domínio e os contracts centrais.
-
-## 17. Próxima etapa de documentação antes de código pesado
-
-Depois deste plano conceitual, os documentos mais úteis serão:
-
-1. `Architecture Decision Records` para escolhas técnicas concretas;
-2. especificação do schema PRDX v0.1;
-3. modelo formal de `Constraint` e inheritance;
-4. contract de `PhysicalDesignState` e `DesignTransaction`;
-5. especificação do primeiro importer EasyEDA;
-6. geometry coordinate/unit conventions;
-7. benchmark/test-board specification;
-8. tool contracts do Agent.
-
-Esses documentos devem nascer conforme as decisões forem sendo validadas, evitando cristalizar prematuramente hipóteses experimentais.
-
-## 18. Definição de sucesso da primeira grande validação
-
-O primeiro resultado realmente convincente não é “a IA colocou os componentes”.
-
-É conseguir observar repetidamente o ciclo:
+Cada run de benchmark relevante deve produzir:
 
 ```text
-understand state
-      ↓
-plan
-      ↓
-place / reserve / route
-      ↓
-measure
-      ↓
-find regression or routing problem
-      ↓
-reopen previous decision
-      ↓
-repair
-      ↓
-verify
-      ↓
-commit
+run manifest
+input design hash
+constraint hash
+manufacturing profile
+optimizer config
+algorithm strategy versions
+random seed
+AI provider/model when used
+candidate metrics
+transaction history
+routing diagnostics
+final findings
 ```
 
-em várias placas pequenas diferentes, chegando a estados:
+Isso evita resultados impossíveis de reproduzir.
 
-- geometricamente válidos;
-- roteáveis;
-- DRC-clean dentro das regras implementadas;
-- coerentes com constraints elétricas informadas;
-- explicáveis;
-- e considerados sensatos por revisão humana.
+## 15. Regra final do roadmap
 
-Essa é a evidência necessária para justificar a evolução do WTK.Place&Router para um sistema de physical design autônomo mais amplo.
+O projeto deve evoluir por **evidência de capacidade**, não por quantidade de features implementadas.
+
+Um estágio está tecnicamente maduro quando:
+
+- possui contract claro;
+- pode ser testado isoladamente;
+- possui benchmark;
+- produz diagnostics úteis;
+- possui failure modes conhecidos;
+- não exige que a IA compense uma lacuna determinística que deveria pertencer ao engine local.
