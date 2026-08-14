@@ -1,0 +1,363 @@
+{
+  "schemaVersion": "0.1.0",
+  "projectId": "prj_demo_001",
+  "projectRevision": 1,
+  "metadata": {
+    "name": "Minimal 2 Layer Example",
+    "description": "Schema fixture for PRDX 0.1",
+    "createdAt": "2026-08-14T19:00:00Z",
+    "modifiedAt": "2026-08-14T19:00:00Z",
+    "author": null,
+    "tags": ["schema-fixture"]
+  },
+  "sourceImports": [
+    {
+      "id": "src_001",
+      "adapterId": "fixture",
+      "adapterVersion": "0.1.0",
+      "sourceType": "TEST_FIXTURE",
+      "sourceName": "minimal-2layer",
+      "sourceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "importedAt": "2026-08-14T19:00:00Z",
+      "embeddedPath": null,
+      "capabilities": {
+        "components": "COMPLETE",
+        "nets": "COMPLETE",
+        "footprints": "COMPLETE",
+        "pinNames": "COMPLETE",
+        "boardOutline": "COMPLETE",
+        "stackup": "COMPLETE",
+        "existingPlacement": "COMPLETE",
+        "existingRoutes": "NOT_AVAILABLE"
+      },
+      "lossDiagnostics": []
+    }
+  ],
+  "logicalDesign": {
+    "components": [
+      {
+        "id": "cmp_u1",
+        "referenceDesignator": "U1",
+        "value": "TEST_IC",
+        "partNumber": "TEST-IC-2PIN",
+        "manufacturer": null,
+        "footprintId": "fp_u1",
+        "placementPolicy": "MOVABLE",
+        "properties": {},
+        "semanticRole": {
+          "value": "TEST_DEVICE",
+          "unit": null,
+          "status": "KNOWN",
+          "confidence": null,
+          "provenance": {
+            "kind": "USER_DEFINED",
+            "sourceRef": null,
+            "model": null,
+            "operation": null,
+            "timestamp": null,
+            "note": null
+          }
+        },
+        "sourceMetadata": {},
+        "provenance": {
+          "kind": "IMPORTED",
+          "sourceRef": "src_001",
+          "model": null,
+          "operation": null,
+          "timestamp": null,
+          "note": null
+        }
+      }
+    ],
+    "footprints": [
+      {
+        "id": "fp_u1",
+        "name": "TEST_2PAD",
+        "origin": {"x": 0, "y": 0},
+        "body": {
+          "outer": [
+            {"x": -1000, "y": -500},
+            {"x": 1000, "y": -500},
+            {"x": 1000, "y": 500},
+            {"x": -1000, "y": 500}
+          ],
+          "holes": []
+        },
+        "courtyard": {
+          "outer": [
+            {"x": -1200, "y": -700},
+            {"x": 1200, "y": -700},
+            {"x": 1200, "y": 700},
+            {"x": -1200, "y": 700}
+          ],
+          "holes": []
+        },
+        "heightUnits": 1000,
+        "pads": [
+          {
+            "id": "pad_u1_1",
+            "number": "1",
+            "name": "IN",
+            "connectedPin": "1",
+            "position": {"x": -750, "y": 0},
+            "rotationDeg": 0,
+            "shape": "RECT",
+            "sizeXUnits": 800,
+            "sizeYUnits": 800,
+            "customPolygon": null,
+            "padType": "SMD",
+            "layerIds": ["layer_top_cu"],
+            "drillDiameterUnits": null,
+            "maskExpansionUnits": 50,
+            "pasteExpansionUnits": 0
+          },
+          {
+            "id": "pad_u1_2",
+            "number": "2",
+            "name": "GND",
+            "connectedPin": "2",
+            "position": {"x": 750, "y": 0},
+            "rotationDeg": 0,
+            "shape": "RECT",
+            "sizeXUnits": 800,
+            "sizeYUnits": 800,
+            "customPolygon": null,
+            "padType": "SMD",
+            "layerIds": ["layer_top_cu"],
+            "drillDiameterUnits": null,
+            "maskExpansionUnits": 50,
+            "pasteExpansionUnits": 0
+          }
+        ],
+        "holes": [],
+        "graphics": [],
+        "provenance": {
+          "kind": "IMPORTED",
+          "sourceRef": "src_001",
+          "model": null,
+          "operation": null,
+          "timestamp": null,
+          "note": null
+        }
+      }
+    ],
+    "netlist": {
+      "nets": [
+        {
+          "id": "net_in",
+          "name": "IN",
+          "endpoints": [
+            {"componentId": "cmp_u1", "padId": "pad_u1_1"}
+          ],
+          "netClassId": null,
+          "electricalProperties": {},
+          "routingProperties": {},
+          "provenance": {
+            "kind": "IMPORTED",
+            "sourceRef": "src_001",
+            "model": null,
+            "operation": null,
+            "timestamp": null,
+            "note": null
+          }
+        },
+        {
+          "id": "net_gnd",
+          "name": "GND",
+          "endpoints": [
+            {"componentId": "cmp_u1", "padId": "pad_u1_2"}
+          ],
+          "netClassId": null,
+          "electricalProperties": {
+            "signalType": {
+              "value": "GROUND",
+              "unit": null,
+              "status": "KNOWN",
+              "confidence": 1.0,
+              "provenance": {
+                "kind": "DETERMINISTIC_INFERENCE",
+                "sourceRef": "net-name",
+                "model": null,
+                "operation": null,
+                "timestamp": null,
+                "note": null
+              }
+            }
+          },
+          "routingProperties": {},
+          "provenance": {
+            "kind": "IMPORTED",
+            "sourceRef": "src_001",
+            "model": null,
+            "operation": null,
+            "timestamp": null,
+            "note": null
+          }
+        }
+      ]
+    },
+    "netClasses": [],
+    "groups": []
+  },
+  "board": {
+    "origin": {"x": 0, "y": 0},
+    "outline": {
+      "outer": [
+        {"x": 0, "y": 0},
+        {"x": 50000, "y": 0},
+        {"x": 50000, "y": 30000},
+        {"x": 0, "y": 30000}
+      ],
+      "holes": []
+    },
+    "cutouts": [],
+    "holes": [],
+    "thicknessUnits": 1600,
+    "material": {
+      "value": "FR-4",
+      "unit": null,
+      "status": "KNOWN",
+      "confidence": null,
+      "provenance": {
+        "kind": "USER_DEFINED",
+        "sourceRef": null,
+        "model": null,
+        "operation": null,
+        "timestamp": null,
+        "note": null
+      }
+    },
+    "layers": [
+      {
+        "id": "layer_top_cu",
+        "name": "Top Copper",
+        "layerType": "COPPER_SIGNAL",
+        "order": 0,
+        "thicknessUnits": 35,
+        "material": {
+          "value": "Copper",
+          "unit": null,
+          "status": "KNOWN",
+          "confidence": null,
+          "provenance": {
+            "kind": "DEFAULT",
+            "sourceRef": null,
+            "model": null,
+            "operation": null,
+            "timestamp": null,
+            "note": null
+          }
+        },
+        "properties": {}
+      },
+      {
+        "id": "layer_bottom_cu",
+        "name": "Bottom Copper",
+        "layerType": "COPPER_SIGNAL",
+        "order": 1,
+        "thicknessUnits": 35,
+        "material": {
+          "value": "Copper",
+          "unit": null,
+          "status": "KNOWN",
+          "confidence": null,
+          "provenance": {
+            "kind": "DEFAULT",
+            "sourceRef": null,
+            "model": null,
+            "operation": null,
+            "timestamp": null,
+            "note": null
+          }
+        },
+        "properties": {}
+      }
+    ],
+    "stackup": [
+      {"layerId": "layer_top_cu", "referenceLayerIds": []},
+      {"layerId": "layer_bottom_cu", "referenceLayerIds": []}
+    ],
+    "regions": [],
+    "keepouts": []
+  },
+  "manufacturingProfile": {
+    "id": "mfg_demo",
+    "name": "Demo 2 Layer",
+    "profileVersion": "1",
+    "templateSource": null,
+    "lastValidatedAt": null,
+    "capabilities": {
+      "minimumTraceWidth": {
+        "value": 150,
+        "unit": "um",
+        "status": "KNOWN",
+        "confidence": null,
+        "provenance": {
+          "kind": "USER_DEFINED",
+          "sourceRef": null,
+          "model": null,
+          "operation": null,
+          "timestamp": null,
+          "note": null
+        }
+      },
+      "minimumSpacing": {
+        "value": 150,
+        "unit": "um",
+        "status": "KNOWN",
+        "confidence": null,
+        "provenance": {
+          "kind": "USER_DEFINED",
+          "sourceRef": null,
+          "model": null,
+          "operation": null,
+          "timestamp": null,
+          "note": null
+        }
+      }
+    },
+    "provenance": {
+      "kind": "USER_DEFINED",
+      "sourceRef": null,
+      "model": null,
+      "operation": null,
+      "timestamp": null,
+      "note": null
+    }
+  },
+  "constraints": [],
+  "semantics": {
+    "relationships": []
+  },
+  "physicalDesignState": {
+    "stateId": "state_001",
+    "stateRevision": 1,
+    "status": "UNROUTED",
+    "basedOnProjectRevision": 1,
+    "componentPoses": [
+      {
+        "componentId": "cmp_u1",
+        "x": 25000,
+        "y": 15000,
+        "rotationDeg": 0,
+        "side": "TOP",
+        "placementState": "PLACED",
+        "lastModifiedBy": "fixture"
+      }
+    ],
+    "routes": [],
+    "vias": [],
+    "copperZones": [],
+    "lastModifiedAt": "2026-08-14T19:00:00Z",
+    "lastModifiedBy": "fixture"
+  },
+  "reviewDecisions": [],
+  "projectSettings": {
+    "optimizationIntent": {
+      "profile": "BALANCED"
+    },
+    "exportProfiles": [],
+    "sourceEmbeddingPolicy": "REFERENCE_ONLY"
+  },
+  "extensions": {}
+}
