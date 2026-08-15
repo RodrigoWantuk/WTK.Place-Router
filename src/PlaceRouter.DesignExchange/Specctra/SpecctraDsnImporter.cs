@@ -1,0 +1,583 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using PlaceRouter.Application.Projects;
+using PlaceRouter.Core.Diagnostics;
+using PlaceRouter.Core.Primitives;
+using PlaceRouter.DesignExchange.Prdx;
+using PlaceRouter.Domain.Model;
+
+namespace PlaceRouter.DesignExchange.Specctra;
+
+public sealed class SpecctraDsnImporter : IDesignImporter
+{
+    public string AdapterId => "placerouter.specctra-dsn";
+
+    public string AdapterVersion => "0.1.0-plan03";
+
+    public string SourceType => "SPECCTRA_DSN";
+
+    public bool CanImport(ImportRequest request) =>
+        string.Equals(Path.GetExtension(request.SourcePath), ".dsn", StringComparison.OrdinalIgnoreCase);
+
+    public ImportResult Import(ImportRequest request)
+    {
+        if (!File.Exists(request.SourcePath))
+        {
+            var diagnostic = Diagnostic.Fatal(
+                DiagnosticCodes.ImportInvalidSource,
+                "Import",
+                $"DSN source '{request.SourcePath}' does not exist.");
+            return new ImportResult(null, new Dictionary<string, string>(StringComparer.Ordinal), [diagnostic], null, new ImportLossReport([]));
+        }
+
+        try
+        {
+            var sourceBytes = File.ReadAllBytes(request.SourcePath);
+            var sourceText = Encoding.UTF8.GetString(sourceBytes);
+            var root = SExpression.Parse(sourceText);
+            if (!root.IsList("pcb"))
+            {
+                throw new InvalidDataException("Root DSN expression must be '(pcb ...)'.");
+            }
+
+            var sourceHash = Sha256.Hex(sourceBytes);
+            var importedAt = DateTimeOffset.UtcNow;
+            var sourceImportId = new SourceImportId("src_" + sourceHash[..12]);
+            var embeddedPath = request.SourceRetentionPolicy == SourceRetentionPolicy.Embed
+                ? "source/" + Path.GetFileName(request.SourcePath)
+                : null;
+            var capabilities = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["boardOutline"] = "COMPLETE",
+                ["layers"] = "COMPLETE",
+                ["components"] = "COMPLETE",
+                ["componentPlacement"] = "COMPLETE",
+                ["pads"] = "COMPLETE",
+                ["nets"] = "COMPLETE",
+                ["rules"] = "PARTIAL",
+                ["stackupMaterials"] = "MISSING",
+                ["existingRoutes"] = "NOT_AVAILABLE"
+            };
+            var losses = new List<Diagnostic>
+            {
+                new(
+                    DiagnosticCodes.ImportLoss,
+                    DiagnosticSeverity.Warning,
+                    "Import",
+                    "DSN source did not provide stackup material/thickness data; values remain Unknown.",
+                    Evidence: new Dictionary<string, object?> { ["capability"] = "stackupMaterials" },
+                    Source: AdapterId,
+                    Blocking: false),
+                new(
+                    DiagnosticCodes.ImportLoss,
+                    DiagnosticSeverity.Info,
+                    "Import",
+                    "Initial PLAN-03 DSN import preserves logical/placement handoff and does not import existing route geometry.",
+                    Evidence: new Dictionary<string, object?> { ["capability"] = "existingRoutes" },
+                    Source: AdapterId,
+                    Blocking: false)
+            };
+
+            var project = ToProject(root, request.SourcePath, sourceHash, sourceImportId, embeddedPath, importedAt, capabilities, losses);
+            var fileContext = new ProjectFileContext(
+                null,
+                CanonicalProject.CurrentSchemaVersion,
+                [],
+                [new SourceFingerprint(sourceImportId, sourceHash)],
+                [],
+                request.SourceRetentionPolicy == SourceRetentionPolicy.Embed
+                    ? [new PendingSupplementaryFile(Path.GetFullPath(request.SourcePath), embeddedPath!)]
+                    : []);
+
+            return new ImportResult(
+                new ProjectDocument(project, fileContext),
+                capabilities,
+                losses,
+                new SourceFingerprint(sourceImportId, sourceHash),
+                new ImportLossReport(losses));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or FormatException)
+        {
+            var diagnostic = new Diagnostic(
+                DiagnosticCodes.ImportInvalidSource,
+                DiagnosticSeverity.Error,
+                "Import",
+                $"DSN import failed: {ex.Message}",
+                Blocking: true);
+            return new ImportResult(null, new Dictionary<string, string>(StringComparer.Ordinal), [diagnostic], null, new ImportLossReport([]));
+        }
+    }
+
+    private CanonicalProject ToProject(
+        SExpression root,
+        string sourcePath,
+        string sourceHash,
+        SourceImportId sourceImportId,
+        string? embeddedPath,
+        DateTimeOffset importedAt,
+        IReadOnlyDictionary<string, string> capabilities,
+        IReadOnlyList<Diagnostic> losses)
+    {
+        var name = root.AtomAt(1) ?? Path.GetFileNameWithoutExtension(sourcePath);
+        var projectId = new ProjectId("prj_" + StableToken(name + "_" + sourceHash[..12]));
+        var layers = ReadLayers(root).ToArray();
+        var layerByName = layers.ToDictionary(l => l.Name, l => l.Id, StringComparer.OrdinalIgnoreCase);
+        var outline = ReadOutline(root);
+        var components = new List<Component>();
+        var poses = new List<ComponentPose>();
+        var footprints = new Dictionary<string, Footprint>(StringComparer.Ordinal);
+        var componentPadIds = new Dictionary<string, Dictionary<string, PadId>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var componentNode in root.Descendants("component"))
+        {
+            var reference = componentNode.AtomAt(1) ?? throw new InvalidDataException("Component without reference designator.");
+            var footprintName = componentNode.Child("footprint")?.AtomAt(1) ?? "unknown";
+            var footprintId = new FootprintId("fp_" + StableToken(footprintName));
+            var componentId = new ComponentId("cmp_" + StableToken(reference));
+            var pads = ReadPads(componentNode, footprintId, layerByName).ToArray();
+            if (!footprints.ContainsKey(footprintId.Value))
+            {
+                footprints[footprintId.Value] = new Footprint(
+                    footprintId,
+                    footprintName,
+                    ZeroPoint(),
+                    null,
+                    BodyFromPads(pads),
+                    null,
+                    pads,
+                    [],
+                    [],
+                    ImportedProvenance(sourceImportId));
+            }
+
+            componentPadIds[reference] = pads.ToDictionary(p => p.Number, p => p.Id, StringComparer.OrdinalIgnoreCase);
+            components.Add(new Component(
+                componentId,
+                reference,
+                null,
+                null,
+                null,
+                footprintId,
+                "MOVABLE",
+                new Dictionary<string, SourcedValue>(StringComparer.Ordinal),
+                SourcedValue.Unknown(),
+                JsonObject(("sourceRef", reference)),
+                ImportedProvenance(sourceImportId)));
+
+            var place = componentNode.Child("place");
+            var x = Unit(place?.AtomAt(1) ?? "0");
+            var y = Unit(place?.AtomAt(2) ?? "0");
+            var side = (place?.AtomAt(3) ?? "front").Equals("back", StringComparison.OrdinalIgnoreCase) ? "BOTTOM" : "TOP";
+            var rotation = decimal.Parse(place?.AtomAt(4) ?? "0", System.Globalization.CultureInfo.InvariantCulture);
+            poses.Add(new ComponentPose(componentId, new Point2(x, y), new AngleDegrees(rotation), side, "PLACED", AdapterId));
+        }
+
+        var nets = ReadNets(root, componentPadIds).ToArray();
+        var rules = ReadRules(root);
+        var manufacturing = new ManufacturingProfile(
+            new StableId("mfg_imported_" + sourceHash[..8]),
+            "Imported DSN manufacturing rules",
+            "0.1",
+            null,
+            null,
+            rules,
+            ImportedProvenance(sourceImportId));
+        var sourceImport = new SourceImport(
+            sourceImportId,
+            AdapterId,
+            AdapterVersion,
+            SourceType,
+            Path.GetFileName(sourcePath),
+            sourceHash,
+            importedAt,
+            embeddedPath,
+            capabilities,
+            losses);
+
+        return new CanonicalProject(
+            CanonicalProject.CurrentSchemaVersion,
+            projectId,
+            0,
+            new ProjectMetadata(name, "Imported from Specctra DSN.", importedAt, importedAt, null, ["imported", "dsn"]),
+            [sourceImport],
+            new LogicalDesign(components.OrderBy(c => c.ReferenceDesignator, StringComparer.Ordinal).ToArray(), footprints.Values.OrderBy(f => f.Id.Value, StringComparer.Ordinal).ToArray(), nets, [], []),
+            new BoardDefinition(
+                ZeroPoint(),
+                outline,
+                [],
+                [],
+                null,
+                SourcedValue.Unknown(),
+                layers,
+                layers.Select(l => new StackupEntry(l.Id, [])).ToArray(),
+                [],
+                []),
+            manufacturing,
+            [],
+            new Semantics([]),
+            new PhysicalDesignState(
+                new PhysicalStateId("state_imported"),
+                0,
+                "UNROUTED",
+                0,
+                poses.OrderBy(p => p.ComponentId.Value, StringComparer.Ordinal).ToArray(),
+                [],
+                [],
+                [],
+                importedAt,
+                AdapterId),
+            [],
+            new ProjectSettings(JsonDefaults.EmptyObject, [], embeddedPath is null ? "REFERENCE_ONLY" : "EMBED"),
+            JsonDefaults.EmptyObject);
+    }
+
+    private static IReadOnlyList<BoardLayer> ReadLayers(SExpression root)
+    {
+        var layers = root.Descendants("layer")
+            .Select((node, index) =>
+            {
+                var name = node.AtomAt(1) ?? "Layer" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var type = (node.AtomAt(2) ?? "signal").Equals("plane", StringComparison.OrdinalIgnoreCase) ? "COPPER_PLANE" : "COPPER_SIGNAL";
+                return new BoardLayer(LayerIdFor(name), name, type, index + 1, null, SourcedValue.Unknown(), new Dictionary<string, SourcedValue>(StringComparer.Ordinal));
+            })
+            .ToArray();
+
+        return layers.Length == 0
+            ? [new BoardLayer(new LayerId("layer_top_cu"), "Top", "COPPER_SIGNAL", 1, null, SourcedValue.Unknown(), new Dictionary<string, SourcedValue>(StringComparer.Ordinal))]
+            : layers;
+    }
+
+    private static Polygon2? ReadOutline(SExpression root)
+    {
+        var path = root.Descendants("boundary").SelectMany(b => b.Children.Where(c => c.IsList("path"))).FirstOrDefault()
+            ?? root.Descendants("path").FirstOrDefault();
+        if (path is null)
+        {
+            return null;
+        }
+
+        var numbers = path.Items.Skip(2).Where(i => i.IsAtom).Select(i => Unit(i.Value).Value).ToArray();
+        if (numbers.Length < 6 || numbers.Length % 2 != 0)
+        {
+            throw new InvalidDataException("Boundary path must contain at least three coordinate pairs.");
+        }
+
+        var points = new List<Point2>();
+        for (var i = 0; i < numbers.Length; i += 2)
+        {
+            points.Add(new Point2(new LengthUnits(numbers[i]), new LengthUnits(numbers[i + 1])));
+        }
+
+        return new Polygon2(points, []);
+    }
+
+    private static IEnumerable<Pad> ReadPads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName)
+    {
+        foreach (var pad in componentNode.Children.Where(c => c.IsList("pad")))
+        {
+            var number = pad.AtomAt(1) ?? throw new InvalidDataException("Pad without pin number.");
+            var padType = (pad.AtomAt(2) ?? "smd").Equals("thru", StringComparison.OrdinalIgnoreCase) ? "THROUGH_HOLE" : "SMD";
+            var shape = (pad.AtomAt(3) ?? "rect").ToUpperInvariant() switch
+            {
+                "CIRCLE" or "ROUND" => "CIRCLE",
+                "OVAL" => "OVAL",
+                _ => "RECT"
+            };
+            var x = Unit(pad.AtomAt(4) ?? "0");
+            var y = Unit(pad.AtomAt(5) ?? "0");
+            var sizeX = Unit(pad.AtomAt(6) ?? "0");
+            var sizeY = Unit(pad.AtomAt(7) ?? pad.AtomAt(6) ?? "0");
+            var layerName = pad.AtomAt(8) ?? "Top";
+            var layerId = layerByName.TryGetValue(layerName, out var existingLayer) ? existingLayer : LayerIdFor(layerName);
+
+            yield return new Pad(
+                new PadId("pad_" + StableToken(footprintId.Value + "_" + number)),
+                number,
+                null,
+                number,
+                new Point2(x, y),
+                AngleDegrees.Zero,
+                shape,
+                sizeX,
+                sizeY,
+                null,
+                padType,
+                [layerId],
+                null,
+                null,
+                null);
+        }
+    }
+
+    private static IReadOnlyList<Net> ReadNets(SExpression root, IReadOnlyDictionary<string, Dictionary<string, PadId>> componentPadIds)
+    {
+        return root.Descendants("net")
+            .Select(net =>
+            {
+                var name = net.AtomAt(1) ?? "unnamed";
+                var pins = net.Child("pins")?.Items.Skip(1).Where(i => i.IsAtom).Select(i => i.Value) ?? [];
+                var endpoints = pins.Select(pin =>
+                {
+                    var parts = pin.Split('-', 2, StringSplitOptions.TrimEntries);
+                    var reference = parts[0];
+                    var number = parts.Length == 2 ? parts[1] : null;
+                    componentPadIds.TryGetValue(reference, out var pads);
+                    PadId? padId = number is not null && pads is not null && pads.TryGetValue(number, out var found) ? found : null;
+                    return new NetEndpoint(new ComponentId("cmp_" + StableToken(reference)), padId, number);
+                }).ToArray();
+                return new Net(
+                    new NetId("net_" + StableToken(name)),
+                    name,
+                    endpoints,
+                    null,
+                    new Dictionary<string, SourcedValue>(StringComparer.Ordinal),
+                    new Dictionary<string, SourcedValue>(StringComparer.Ordinal),
+                    Provenance.Unknown);
+            })
+            .OrderBy(n => n.Name, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, SourcedValue> ReadRules(SExpression root)
+    {
+        var rules = root.Descendants("rules").FirstOrDefault();
+        var values = new Dictionary<string, SourcedValue>(StringComparer.Ordinal);
+        if (rules is null)
+        {
+            return values;
+        }
+
+        Add("width", "minimumTrackWidth");
+        Add("clearance", "minimumClearance");
+        Add("drill", "minimumDrill");
+        Add("via", "minimumViaDiameter");
+        return values;
+
+        void Add(string dsnKey, string capabilityKey)
+        {
+            var node = rules.Child(dsnKey);
+            var raw = node?.AtomAt(1);
+            if (raw is null)
+            {
+                return;
+            }
+
+            values[capabilityKey] = KnownNumber(Unit(raw).Value);
+        }
+    }
+
+    private static Polygon2? BodyFromPads(IReadOnlyList<Pad> pads)
+    {
+        if (pads.Count == 0)
+        {
+            return null;
+        }
+
+        var minX = pads.Min(p => p.Position.X.Value - (p.SizeX?.Value ?? 0) / 2);
+        var maxX = pads.Max(p => p.Position.X.Value + (p.SizeX?.Value ?? 0) / 2);
+        var minY = pads.Min(p => p.Position.Y.Value - (p.SizeY?.Value ?? 0) / 2);
+        var maxY = pads.Max(p => p.Position.Y.Value + (p.SizeY?.Value ?? 0) / 2);
+        return new Polygon2([
+            new Point2(new LengthUnits(minX), new LengthUnits(minY)),
+            new Point2(new LengthUnits(maxX), new LengthUnits(minY)),
+            new Point2(new LengthUnits(maxX), new LengthUnits(maxY)),
+            new Point2(new LengthUnits(minX), new LengthUnits(maxY))
+        ], []);
+    }
+
+    private static LayerId LayerIdFor(string name)
+    {
+        if (name.Equals("Top", StringComparison.OrdinalIgnoreCase))
+        {
+            return new LayerId("layer_top_cu");
+        }
+
+        if (name.Equals("Bottom", StringComparison.OrdinalIgnoreCase))
+        {
+            return new LayerId("layer_bottom_cu");
+        }
+
+        return new LayerId("layer_" + StableToken(name) + "_cu");
+    }
+
+    private static string StableToken(string value)
+    {
+        var token = Regex.Replace(value.Trim().ToLowerInvariant(), "[^a-z0-9]+", "_").Trim('_');
+        return string.IsNullOrWhiteSpace(token) ? "unnamed" : token;
+    }
+
+    private static LengthUnits Unit(string value) =>
+        new(long.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
+
+    private static Point2 ZeroPoint() => new(LengthUnits.FromMicrometers(0), LengthUnits.FromMicrometers(0));
+
+    private static SourcedValue KnownNumber(long value) =>
+        new(JsonSerializer.SerializeToElement(value), "um", "KNOWN", 1.0, Provenance.UserDefined);
+
+    private static Provenance ImportedProvenance(SourceImportId sourceImportId) =>
+        new("IMPORTED", sourceImportId.Value, null, "dsn-import", null, null);
+
+    private static JsonElement JsonObject(params (string Key, string Value)[] values)
+    {
+        var dictionary = values.ToDictionary(v => v.Key, v => v.Value, StringComparer.Ordinal);
+        return JsonSerializer.SerializeToElement(dictionary);
+    }
+
+    private sealed class SExpression
+    {
+        private SExpression(string value, IReadOnlyList<SExpression> items)
+        {
+            Value = value;
+            Items = items;
+        }
+
+        public string Value { get; }
+
+        public IReadOnlyList<SExpression> Items { get; }
+
+        public IReadOnlyList<SExpression> Children => Items.Skip(1).Where(i => !i.IsAtom).ToArray();
+
+        public bool IsAtom => Items.Count == 0;
+
+        public static SExpression Atom(string value) => new(value, []);
+
+        public static SExpression List(IReadOnlyList<SExpression> items) => new(string.Empty, items);
+
+        public static SExpression Parse(string source)
+        {
+            var tokens = Tokenize(source).ToArray();
+            var index = 0;
+            var expression = ParseExpression(tokens, ref index);
+            if (index != tokens.Length)
+            {
+                throw new InvalidDataException("Unexpected tokens after DSN root expression.");
+            }
+
+            return expression;
+        }
+
+        public bool IsList(string head) =>
+            !IsAtom && Items.Count > 0 && Items[0].IsAtom && Items[0].Value.Equals(head, StringComparison.OrdinalIgnoreCase);
+
+        public string? AtomAt(int index) =>
+            Items.Count > index && Items[index].IsAtom ? Items[index].Value : null;
+
+        public SExpression? Child(string head) =>
+            Children.FirstOrDefault(c => c.IsList(head));
+
+        public IEnumerable<SExpression> Descendants(string head)
+        {
+            foreach (var child in Children)
+            {
+                if (child.IsList(head))
+                {
+                    yield return child;
+                }
+
+                foreach (var descendant in child.Descendants(head))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+
+        private static SExpression ParseExpression(IReadOnlyList<string> tokens, ref int index)
+        {
+            if (index >= tokens.Count)
+            {
+                throw new InvalidDataException("Unexpected end of DSN.");
+            }
+
+            var token = tokens[index++];
+            if (token == "(")
+            {
+                var items = new List<SExpression>();
+                while (index < tokens.Count && tokens[index] != ")")
+                {
+                    items.Add(ParseExpression(tokens, ref index));
+                }
+
+                if (index >= tokens.Count || tokens[index] != ")")
+                {
+                    throw new InvalidDataException("Unclosed DSN list.");
+                }
+
+                index++;
+                return List(items);
+            }
+
+            if (token == ")")
+            {
+                throw new InvalidDataException("Unexpected ')' in DSN.");
+            }
+
+            return Atom(token);
+        }
+
+        private static IEnumerable<string> Tokenize(string source)
+        {
+            var tokens = new List<string>();
+            var token = new StringBuilder();
+            var quoted = false;
+            for (var i = 0; i < source.Length; i++)
+            {
+                var c = source[i];
+                if (quoted)
+                {
+                    if (c == '"')
+                    {
+                        quoted = false;
+                        tokens.Add(token.ToString());
+                        token.Clear();
+                    }
+                    else
+                    {
+                        token.Append(c);
+                    }
+
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    Flush();
+                    quoted = true;
+                    continue;
+                }
+
+                if (c == '(' || c == ')')
+                {
+                    Flush();
+                    tokens.Add(c.ToString());
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(c) || c == '\uFEFF')
+                {
+                    Flush();
+                    continue;
+                }
+
+                token.Append(c);
+            }
+
+            if (quoted)
+            {
+                throw new InvalidDataException("Unclosed quoted DSN atom.");
+            }
+
+            Flush();
+            return tokens;
+
+            void Flush()
+            {
+                if (token.Length > 0)
+                {
+                    tokens.Add(token.ToString());
+                    token.Clear();
+                }
+            }
+        }
+    }
+}

@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PlaceRouter.Core\PlaceRouter.Core.csproj" />
     <ProjectReference Include="..\PlaceRouter.Domain\PlaceRouter.Domain.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Geometry\PlaceRouter.Geometry.csproj" />
   </ItemGroup>
 
 </Project>

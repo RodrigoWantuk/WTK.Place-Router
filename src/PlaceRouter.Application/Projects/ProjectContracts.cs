@@ -15,14 +15,17 @@ public sealed record ProjectFileContext(
     string FormatVersion,
     IReadOnlyList<string> FeatureFlags,
     IReadOnlyList<SourceFingerprint> SourceFingerprints,
-    IReadOnlyList<SupplementaryEntry> SupplementaryEntries)
+    IReadOnlyList<SupplementaryEntry> SupplementaryEntries,
+    IReadOnlyList<PendingSupplementaryFile> PendingSupplementaryFiles)
 {
-    public static ProjectFileContext New() => new(null, "0.1.0", [], [], []);
+    public static ProjectFileContext New() => new(null, "0.1.0", [], [], [], []);
 }
 
 public sealed record SourceFingerprint(SourceImportId SourceImportId, string Sha256);
 
 public sealed record SupplementaryEntry(string Path, long Length, string Sha256);
+
+public sealed record PendingSupplementaryFile(string SourcePath, string EntryPath);
 
 public sealed record ProjectLoadResult(ProjectDocument? Document, IReadOnlyList<Diagnostic> Diagnostics)
 {

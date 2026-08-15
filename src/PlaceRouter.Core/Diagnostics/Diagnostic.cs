@@ -61,6 +61,11 @@ public static class DiagnosticCodes
     public const string RouteViaNetMismatch = "PRDX-ROUTE-VIA-NET-MISMATCH";
     public const string LayerNotCopper = "PRDX-LAYER-NOT-COPPER";
     public const string SaveFailed = "PRDX-SAVE-FAILED";
+    public const string ImportUnsupported = "IMPORT-UNSUPPORTED";
+    public const string ImportInvalidSource = "IMPORT-INVALID-SOURCE";
+    public const string ImportLoss = "IMPORT-LOSS";
+    public const string TransactionRejected = "TX-REJECTED";
+    public const string RunBaselineStale = "RUN-BASELINE-STALE";
 }
 
 public static class DiagnosticExtensions

@@ -180,7 +180,8 @@ public sealed class PrdxProjectStore(
                 manifestNode["formatVersion"]?.GetValue<string>() ?? PrdxManifest.CurrentFormatVersion,
                 Strings(manifestNode["featureFlags"]).ToArray(),
                 ReadFingerprints(manifestNode),
-                ReadSupplementaryEntries(archive));
+                ReadSupplementaryEntries(archive),
+                []);
 
             return new ProjectLoadResult(new ProjectDocument(project, context), diagnostics);
         }
@@ -289,6 +290,19 @@ public sealed class PrdxProjectStore(
                     using var targetStream = targetEntry.Open();
                     sourceStream.CopyTo(targetStream);
                 }
+            }
+
+            foreach (var pending in context.PendingSupplementaryFiles.OrderBy(e => e.EntryPath, StringComparer.Ordinal))
+            {
+                if (!File.Exists(pending.SourcePath))
+                {
+                    continue;
+                }
+
+                var targetEntry = archive.CreateEntry(pending.EntryPath, CompressionLevel.Optimal);
+                using var sourceStream = File.OpenRead(pending.SourcePath);
+                using var targetStream = targetEntry.Open();
+                sourceStream.CopyTo(targetStream);
             }
         }
 
