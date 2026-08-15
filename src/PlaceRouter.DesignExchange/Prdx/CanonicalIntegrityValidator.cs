@@ -16,6 +16,8 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
         ValidateNets(project, index, diagnostics);
         ValidateBoard(project, index, diagnostics);
         ValidateGroups(project, index, diagnostics);
+        ValidateConstraints(project, index, diagnostics);
+        ValidateSemantics(project, index, diagnostics);
         ValidatePhysicalState(project, index, diagnostics);
 
         return new ProjectValidationResult(diagnostics);
@@ -187,10 +189,7 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
 
             foreach (var member in group.Members)
             {
-                if (!index.Exists(member.EntityType, member.EntityId))
-                {
-                    diagnostics.Add(RefNotFound("Group member references an unknown entity.", "GROUP", group.Id.Value, member.EntityType, member.EntityId));
-                }
+                ValidateEntityReference(index, diagnostics, "GROUP", group.Id.Value, member.EntityType, member.EntityId, "Group member references an unknown entity.");
             }
         }
 
@@ -216,6 +215,72 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
                 {
                     break;
                 }
+            }
+        }
+    }
+
+    private static void ValidateConstraints(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
+    {
+        foreach (var constraint in project.Constraints)
+        {
+            ValidateSelector(constraint.Source, constraint.Id.Value, "sourceSelector", index, diagnostics);
+            if (constraint.Target is not null)
+            {
+                ValidateSelector(constraint.Target, constraint.Id.Value, "targetSelector", index, diagnostics);
+            }
+
+            foreach (var layerId in constraint.Scope.LayerIds)
+            {
+                ValidateLayer(layerId.Value, "Constraint scope references an unknown layer.", "CONSTRAINT", constraint.Id.Value, index, diagnostics);
+            }
+        }
+    }
+
+    private static void ValidateSelector(ConstraintSelector selector, string constraintId, string selectorName, ProjectIndex index, List<Diagnostic> diagnostics)
+    {
+        switch (selector.Kind)
+        {
+            case "ENTITY":
+                var entityType = selector.EntityType ?? string.Empty;
+                foreach (var entityId in selector.EntityIds)
+                {
+                    ValidateEntityReference(index, diagnostics, "CONSTRAINT", constraintId, entityType, entityId, $"Constraint {selectorName} references an unknown entity.");
+                }
+                break;
+
+            case "GROUP":
+                foreach (var entityId in selector.EntityIds)
+                {
+                    ValidateEntityReference(index, diagnostics, "CONSTRAINT", constraintId, "GROUP", entityId, $"Constraint {selectorName} references an unknown group.");
+                }
+                break;
+
+            case "REGION":
+                foreach (var entityId in selector.EntityIds)
+                {
+                    ValidateEntityReference(index, diagnostics, "CONSTRAINT", constraintId, "REGION", entityId, $"Constraint {selectorName} references an unknown region.");
+                }
+                break;
+
+            case "CLASS":
+                if (!string.IsNullOrWhiteSpace(selector.EntityType))
+                {
+                    foreach (var entityId in selector.EntityIds)
+                    {
+                        ValidateEntityReference(index, diagnostics, "CONSTRAINT", constraintId, selector.EntityType, entityId, $"Constraint {selectorName} references an unknown class entity.");
+                    }
+                }
+                break;
+        }
+    }
+
+    private static void ValidateSemantics(CanonicalProject project, ProjectIndex index, List<Diagnostic> diagnostics)
+    {
+        foreach (var relationship in project.Semantics.Relationships)
+        {
+            foreach (var entityRef in relationship.EntityRefs)
+            {
+                ValidateEntityReference(index, diagnostics, "SEMANTIC_RELATIONSHIP", relationship.Id.Value, entityRef.EntityType, entityRef.EntityId, "Semantic relationship references an unknown entity.");
             }
         }
     }
@@ -329,6 +394,18 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
         }
     }
 
+    private static void ValidateEntityReference(ProjectIndex index, List<Diagnostic> diagnostics, string ownerType, string ownerId, string entityType, string entityId, string missingMessage)
+    {
+        if (index.TryExists(entityType, entityId, out var knownType))
+        {
+            return;
+        }
+
+        diagnostics.Add(knownType
+            ? RefNotFound(missingMessage, ownerType, ownerId, entityType, entityId)
+            : UnknownEntityType(ownerType, ownerId, entityType));
+    }
+
     private static Diagnostic RefNotFound(string message, string ownerType, string ownerId, string missingType, string missingId) =>
         new(
             DiagnosticCodes.RefNotFound,
@@ -356,6 +433,15 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
             [new EntityReference(entityType, entityId)],
             Blocking: true);
 
+    private static Diagnostic UnknownEntityType(string ownerType, string ownerId, string entityType) =>
+        new(
+            DiagnosticCodes.EntityTypeUnknown,
+            DiagnosticSeverity.Error,
+            "Integrity",
+            $"Unknown entity type '{entityType}'.",
+            [new EntityReference(ownerType, ownerId)],
+            Blocking: true);
+
     private sealed class ProjectIndex
     {
         public ProjectIndex(CanonicalProject project, List<Diagnostic> diagnostics)
@@ -368,8 +454,11 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
             AddMany(project.Board.Regions.Select(x => x.Id.Value), "REGION", Regions, diagnostics);
             AddMany(project.Board.Keepouts.Select(x => x.Id.Value), "KEEPOUT", Keepouts, diagnostics);
             AddMany(project.Constraints.Select(x => x.Id.Value), "CONSTRAINT", Constraints, diagnostics);
+            AddMany(project.Semantics.Relationships.Select(x => x.Id.Value), "SEMANTIC_RELATIONSHIP", SemanticRelationships, diagnostics);
             AddMany(project.PhysicalDesignState.Routes.Select(x => x.Id.Value), "ROUTE", Routes, diagnostics);
             AddMany(project.PhysicalDesignState.CopperZones.Select(x => x.Id.Value), "COPPER_ZONE", CopperZones, diagnostics);
+            AddMany(project.ReviewDecisions.Select(x => x.Id.Value), "REVIEW_DECISION", ReviewDecisions, diagnostics);
+            AddMany(project.Board.Holes.Select(x => x.Id.Value), "BOARD_HOLE", BoardHoles, diagnostics);
 
             foreach (var layer in project.Board.Layers)
             {
@@ -410,6 +499,14 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
                     diagnostics.Add(Duplicate("Duplicate via id.", "VIA", via.Id.Value));
                 }
             }
+
+            foreach (var track in project.PhysicalDesignState.Routes.SelectMany(route => route.TrackSegments))
+            {
+                if (!TrackSegments.Add(track.Id.Value))
+                {
+                    diagnostics.Add(Duplicate("Duplicate track segment id.", "TRACK_SEGMENT", track.Id.Value));
+                }
+            }
         }
 
         public HashSet<string> SourceImports { get; } = new(StringComparer.Ordinal);
@@ -424,12 +521,18 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
         public HashSet<string> Regions { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Keepouts { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Constraints { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> SemanticRelationships { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> Vias { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> TrackSegments { get; } = new(StringComparer.Ordinal);
         public HashSet<string> CopperZones { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Routes { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ReviewDecisions { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> BoardHoles { get; } = new(StringComparer.Ordinal);
 
-        public bool Exists(string entityType, string entityId) =>
-            Normalize(entityType) switch
+        public bool TryExists(string entityType, string entityId, out bool knownType)
+        {
+            knownType = true;
+            return Normalize(entityType) switch
             {
                 "SOURCE_IMPORT" => SourceImports.Contains(entityId),
                 "COMPONENT" => Components.ContainsKey(entityId),
@@ -442,11 +545,16 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
                 "KEEPOUT" => Keepouts.Contains(entityId),
                 "LAYER" => Layers.ContainsKey(entityId),
                 "CONSTRAINT" => Constraints.Contains(entityId),
+                "SEMANTIC_RELATIONSHIP" => SemanticRelationships.Contains(entityId),
                 "ROUTE" => Routes.Contains(entityId),
                 "VIA" => Vias.ContainsKey(entityId),
+                "TRACK_SEGMENT" => TrackSegments.Contains(entityId),
                 "COPPER_ZONE" => CopperZones.Contains(entityId),
-                _ => true
+                "REVIEW_DECISION" => ReviewDecisions.Contains(entityId),
+                "BOARD_HOLE" => BoardHoles.Contains(entityId),
+                _ => Unknown(out knownType)
             };
+        }
 
         private static void AddMany(IEnumerable<string> ids, string entityType, HashSet<string> set, List<Diagnostic> diagnostics)
         {
@@ -466,7 +574,19 @@ public sealed class CanonicalIntegrityValidator : ICanonicalProjectValidator
                 "NETS" => "NET",
                 "LAYERS" => "LAYER",
                 "REGIONS" => "REGION",
+                "TRACK" => "TRACK_SEGMENT",
+                "TRACKS" => "TRACK_SEGMENT",
+                "TRACK_SEGMENTS" => "TRACK_SEGMENT",
+                "SEMANTIC_RELATIONSHIPS" => "SEMANTIC_RELATIONSHIP",
+                "REVIEW_DECISIONS" => "REVIEW_DECISION",
+                "BOARD_HOLES" => "BOARD_HOLE",
                 var value => value
             };
+
+        private static bool Unknown(out bool knownType)
+        {
+            knownType = false;
+            return false;
+        }
     }
 }

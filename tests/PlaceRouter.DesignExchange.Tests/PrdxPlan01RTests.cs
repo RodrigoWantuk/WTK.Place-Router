@@ -207,6 +207,118 @@ public sealed class PrdxPlan01RTests
         Assert.Contains(unresolved.Diagnostics, d => d.Code == DiagnosticCodes.PadMappingUnresolved && !d.Blocking);
     }
 
+    [Theory]
+    [InlineData("constraint-missing-component", DiagnosticCodes.RefNotFound)]
+    [InlineData("constraint-missing-layer", DiagnosticCodes.LayerNotFound)]
+    [InlineData("constraint-missing-group", DiagnosticCodes.RefNotFound)]
+    [InlineData("constraint-missing-region", DiagnosticCodes.RefNotFound)]
+    [InlineData("semantic-missing-net", DiagnosticCodes.RefNotFound)]
+    [InlineData("unknown-entity-type", DiagnosticCodes.EntityTypeUnknown)]
+    public void Integrity_validator_rejects_invalid_constraint_and_semantic_references(string scenario, string expectedCode)
+    {
+        using var temp = new TempDirectory();
+        var project = JsonNode.Parse(PrdxTestData.FullProjectJson())!.AsObject();
+
+        switch (scenario)
+        {
+            case "constraint-missing-component":
+                AddConstraint(project, sourceKind: "ENTITY", entityType: "COMPONENT", entityIds: ["cmp_missing"]);
+                break;
+            case "constraint-missing-layer":
+                AddConstraint(project, layerIds: ["layer_missing"]);
+                break;
+            case "constraint-missing-group":
+                AddConstraint(project, sourceKind: "GROUP", entityType: null, entityIds: ["grp_missing"]);
+                break;
+            case "constraint-missing-region":
+                AddConstraint(project, sourceKind: "REGION", entityType: null, entityIds: ["region_missing"]);
+                break;
+            case "semantic-missing-net":
+                AddSemanticRelationship(project, "NET", "net_missing");
+                break;
+            case "unknown-entity-type":
+                AddConstraint(project, sourceKind: "ENTITY", entityType: "COMPONNET", entityIds: ["cmp_u1"]);
+                break;
+        }
+
+        var result = new PrdxProjectStore().Load(PrdxTestData.CreateFixturePrdx(temp.Path, project.ToJsonString()));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Code == expectedCode && d.Blocking);
+    }
+
+    [Fact]
+    public void Integrity_validator_rejects_duplicate_track_semantic_relationship_and_review_decision_ids()
+    {
+        using var temp = new TempDirectory();
+        var project = JsonNode.Parse(PrdxTestData.FullProjectJson())!.AsObject();
+        AddDuplicateTracks(project);
+        AddSemanticRelationship(project, "NET", "net_in");
+        AddSemanticRelationship(project, "NET", "net_gnd");
+        project["semantics"]!["relationships"]![1]!["id"] = "sem_rel_1";
+        project["reviewDecisions"] = new JsonArray(
+            ReviewDecision("review_1"),
+            ReviewDecision("review_1"));
+
+        var result = new PrdxProjectStore().Load(PrdxTestData.CreateFixturePrdx(temp.Path, project.ToJsonString()));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.DuplicateId && d.Message.Contains("TRACK_SEGMENT", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.DuplicateId && d.Message.Contains("SEMANTIC_RELATIONSHIP", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.DuplicateId && d.Message.Contains("REVIEW_DECISION", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Diagnostic_entity_refs_and_evidence_round_trip_through_prdx()
+    {
+        using var temp = new TempDirectory();
+        var project = JsonNode.Parse(PrdxTestData.FullProjectJson())!.AsObject();
+        AddConstraint(project);
+        AddSemanticRelationship(project, "NET", "net_in");
+        var sourceImport = project["sourceImports"]![0]!.AsObject();
+        sourceImport["lossDiagnostics"] = new JsonArray(new JsonObject
+        {
+            ["code"] = "IMPORT-PIN-NAME-PARTIAL",
+            ["severity"] = "WARNING",
+            ["category"] = "Import",
+            ["message"] = "Pin names were partially inferred.",
+            ["entityRefs"] = new JsonArray(new JsonObject
+            {
+                ["entityType"] = "COMPONENT",
+                ["entityId"] = "cmp_u1"
+            }),
+            ["evidence"] = new JsonObject
+            {
+                ["adapter"] = "fixture",
+                ["pin"] = 24,
+                ["nested"] = new JsonObject { ["ok"] = true }
+            },
+            ["remediation"] = "Review pin names.",
+            ["source"] = "fixture",
+            ["blocking"] = false
+        });
+
+        var store = new PrdxProjectStore();
+        var loaded = store.Load(PrdxTestData.CreateFixturePrdx(temp.Path, project.ToJsonString()));
+        Assert.True(loaded.Success, Messages(loaded.Diagnostics));
+        var diagnostic = loaded.Project!.SourceImports.Single().LossDiagnostics.Single();
+        Assert.Equal("COMPONENT", diagnostic.EntityRefs!.Single().EntityType);
+        Assert.Equal("cmp_u1", diagnostic.EntityRefs.Single().EntityId);
+        Assert.NotNull(diagnostic.Evidence);
+        Assert.True(diagnostic.Evidence!.ContainsKey("nested"));
+
+        var saveAs = Path.Combine(temp.Path, "roundtrip.prdx");
+        Assert.True(store.Save(loaded.Document!, saveAs).Success);
+        var reopened = store.Load(saveAs);
+        Assert.True(reopened.Success, Messages(reopened.Diagnostics));
+        var reopenedDiagnostic = reopened.Project!.SourceImports.Single().LossDiagnostics.Single();
+
+        Assert.Equal(diagnostic.EntityRefs, reopenedDiagnostic.EntityRefs);
+        Assert.Equal(EvidenceJson(diagnostic), EvidenceJson(reopenedDiagnostic));
+        Assert.Single(reopened.Project.Constraints);
+        Assert.Single(reopened.Project.Semantics.Relationships);
+    }
+
     [Fact]
     public void Save_reopen_is_semantically_equal_and_save_as_preserves_supplementary_entries()
     {
@@ -298,6 +410,129 @@ public sealed class PrdxPlan01RTests
 
     private static string Messages(IEnumerable<Diagnostic> diagnostics) =>
         string.Join(Environment.NewLine, diagnostics.Select(d => $"{d.Code}: {d.Message}"));
+
+    private static void AddConstraint(JsonObject project, string sourceKind = "ENTITY", string? entityType = "COMPONENT", string[]? entityIds = null, string[]? layerIds = null)
+    {
+        project["constraints"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "constraint_1",
+            ["type"] = "MinimumSeparation",
+            ["sourceSelector"] = new JsonObject
+            {
+                ["kind"] = sourceKind,
+                ["entityType"] = entityType,
+                ["entityIds"] = JsonArray(entityIds ?? ["cmp_u1"]),
+                ["query"] = null
+            },
+            ["targetSelector"] = null,
+            ["parameters"] = new JsonObject { ["distanceUnits"] = 1000 },
+            ["enforcement"] = "REQUIRED",
+            ["scope"] = new JsonObject
+            {
+                ["layerIds"] = JsonArray(layerIds ?? ["layer_top_cu"]),
+                ["measurement"] = null,
+                ["projectionMode"] = null,
+                ["geometryTypes"] = new JsonArray()
+            },
+            ["provenance"] = Provenance(),
+            ["reason"] = null,
+            ["enabled"] = true
+        });
+    }
+
+    private static void AddSemanticRelationship(JsonObject project, string entityType, string entityId)
+    {
+        project["semantics"]!["relationships"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "sem_rel_" + (project["semantics"]!["relationships"]!.AsArray().Count + 1),
+            ["type"] = "ADC_REFERENCE",
+            ["entityRefs"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "target",
+                ["entityType"] = entityType,
+                ["entityId"] = entityId
+            }),
+            ["properties"] = new JsonObject(),
+            ["confidence"] = 1.0,
+            ["evidenceRefs"] = new JsonArray(),
+            ["provenance"] = Provenance()
+        });
+    }
+
+    private static void AddDuplicateTracks(JsonObject project)
+    {
+        var physical = project["physicalDesignState"]!.AsObject();
+        physical["routes"] = new JsonArray(
+            Route("route_a", "net_in"),
+            Route("route_b", "net_gnd"));
+    }
+
+    private static JsonObject Route(string routeId, string netId) => new()
+    {
+        ["id"] = routeId,
+        ["netId"] = netId,
+        ["status"] = "ROUTED",
+        ["policy"] = "REROUTABLE",
+        ["trackSegments"] = new JsonArray(new JsonObject
+        {
+            ["id"] = "trk_001",
+            ["geometryKind"] = "LINE",
+            ["layerId"] = "layer_top_cu",
+            ["widthUnits"] = 150,
+            ["start"] = new JsonObject { ["x"] = 0, ["y"] = 0 },
+            ["end"] = new JsonObject { ["x"] = 1000, ["y"] = 0 },
+            ["arcCenter"] = null,
+            ["clockwise"] = null
+        }),
+        ["viaIds"] = new JsonArray(),
+        ["provenance"] = Provenance(),
+        ["metadata"] = new JsonObject()
+    };
+
+    private static JsonObject ReviewDecision(string id) => new()
+    {
+        ["id"] = id,
+        ["decisionType"] = "NOTE",
+        ["fingerprint"] = "fp-" + id,
+        ["entityRefs"] = new JsonArray("cmp_u1"),
+        ["reason"] = "test",
+        ["createdAt"] = "2026-08-14T20:00:00Z",
+        ["createdBy"] = "test"
+    };
+
+    private static JsonObject Provenance() => new()
+    {
+        ["kind"] = "USER_DEFINED",
+        ["sourceRef"] = null,
+        ["model"] = null,
+        ["operation"] = null,
+        ["timestamp"] = null,
+        ["note"] = null
+    };
+
+    private static JsonArray JsonArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+        {
+            array.Add(value);
+        }
+
+        return array;
+    }
+
+    private static string EvidenceJson(Diagnostic diagnostic)
+    {
+        var obj = new JsonObject();
+        foreach (var (key, value) in diagnostic.Evidence!.OrderBy(x => x.Key, StringComparer.Ordinal))
+        {
+            obj[key] = value is JsonElement element
+                ? JsonNode.Parse(element.GetRawText())
+                : JsonSerializer.SerializeToNode(value);
+        }
+
+        return obj.ToJsonString();
+    }
 
     private sealed class ThrowingCommitter : IAtomicFileCommitter
     {

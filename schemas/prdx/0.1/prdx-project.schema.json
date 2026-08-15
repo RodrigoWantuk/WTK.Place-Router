@@ -988,7 +988,15 @@
         "message": {"type": "string"},
         "entityRefs": {
           "type": "array",
-          "items": {"$ref": "#/$defs/id"},
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entityType", "entityId"],
+            "properties": {
+              "entityType": {"type": "string"},
+              "entityId": {"$ref": "#/$defs/id"}
+            }
+          },
           "default": []
         },
         "evidence": {

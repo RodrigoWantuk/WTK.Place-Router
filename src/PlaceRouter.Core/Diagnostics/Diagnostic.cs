@@ -50,6 +50,7 @@ public static class DiagnosticCodes
     public const string PayloadHash = "PRDX-PAYLOAD-HASH";
     public const string ProjectSchema = "PRDX-PROJECT-SCHEMA";
     public const string RefNotFound = "PRDX-REF-NOT-FOUND";
+    public const string EntityTypeUnknown = "PRDX-ENTITY-TYPE-UNKNOWN";
     public const string DuplicateId = "PRDX-DUPLICATE-ID";
     public const string LayerNotFound = "PRDX-LAYER-NOT-FOUND";
     public const string PadFootprintMismatch = "PRDX-PAD-FOOTPRINT-MISMATCH";

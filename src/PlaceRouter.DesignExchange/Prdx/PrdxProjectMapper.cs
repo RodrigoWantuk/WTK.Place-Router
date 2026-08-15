@@ -664,7 +664,7 @@ internal static class PrdxProjectMapper
             S(o, "category"),
             S(o, "message"),
             Arr(o, "entityRefs").Select(e => new EntityReference(S(e, "entityType"), S(e, "entityId"))).ToArray(),
-            null,
+            EvidenceDictionary(o["evidence"]),
             SN(o, "remediation"),
             SN(o, "source"),
             B(o, "blocking"));
@@ -676,11 +676,46 @@ internal static class PrdxProjectMapper
         ["category"] = d.Category,
         ["message"] = d.Message,
         ["entityRefs"] = Array(d.EntityRefs ?? [], e => new JsonObject { ["entityType"] = e.EntityType, ["entityId"] = e.EntityId }),
-        ["evidence"] = new JsonObject(),
+        ["evidence"] = EvidenceObject(d.Evidence),
         ["remediation"] = d.Remediation,
         ["source"] = d.Source,
         ["blocking"] = d.Blocking
     };
+
+    private static IReadOnlyDictionary<string, object?>? EvidenceDictionary(JsonNode? node)
+    {
+        if (node is not JsonObject obj)
+        {
+            return null;
+        }
+
+        return obj.ToDictionary(
+            k => k.Key,
+            v => v.Value is null ? null : (object?)JsonDocument.Parse(v.Value.ToJsonString()).RootElement.Clone(),
+            StringComparer.Ordinal);
+    }
+
+    private static JsonObject EvidenceObject(IReadOnlyDictionary<string, object?>? evidence)
+    {
+        var obj = new JsonObject();
+        if (evidence is null)
+        {
+            return obj;
+        }
+
+        foreach (var item in evidence.OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            obj[item.Key] = item.Value switch
+            {
+                null => null,
+                JsonElement element => Node(element),
+                JsonNode node => node.DeepClone(),
+                _ => JsonSerializer.SerializeToNode(item.Value)
+            };
+        }
+
+        return obj;
+    }
 
     private static IReadOnlyDictionary<string, SourcedValue> SourcedDictionary(JsonNode? node) =>
         Object(node).ToDictionary(k => k.Key, v => SourcedValue((JsonObject)v.Value!), StringComparer.Ordinal);
