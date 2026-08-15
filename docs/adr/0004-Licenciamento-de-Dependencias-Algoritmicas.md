@@ -41,8 +41,8 @@ Ferramentas podem ser executadas externamente para comparar resultados sem se to
 
 ## Decisões iniciais
 
-- Clipper2: strong candidate; confirmar licença/versão no bootstrap antes de incorporar.
-- NetTopologySuite: candidate; confirmar licença/versão no bootstrap antes de incorporar.
+- Clipper2 2.0.0: incorporated library para clipping/offsetting no projeto `PlaceRouter.Geometry`; licença Boost Software License 1.0; isolada atrás de `IGeometryKernel` para impedir vazamento de tipos externos.
+- NetTopologySuite 2.6.0: incorporated library para broad-phase spatial indexing via Quadtree no projeto `PlaceRouter.Geometry`; licença BSD-3-Clause; isolada atrás de `ISpatialIndex<T>`.
 - Google OR-Tools: optional candidate; confirmar licença/versão no bootstrap antes de incorporar.
 - Freerouting: benchmark/reference only por default; o repositório consultado declara GPL-3.0, portanto seu código não deve ser incorporado sem decisão explícita de licenciamento.
 - NJsonSchema 11.6.1: incorporated library para validação JSON Schema no boundary PRDX; licença MIT; versão pinada em `Directory.Packages.props`; isolada atrás de `IPrdxSchemaValidator` para permitir substituição caso o subset Draft 2020-12 exigido deixe de ser atendido.

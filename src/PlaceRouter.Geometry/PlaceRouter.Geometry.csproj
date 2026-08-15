@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PlaceRouter.Core\PlaceRouter.Core.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Domain\PlaceRouter.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Clipper2" />
+    <PackageReference Include="NetTopologySuite" />
+  </ItemGroup>
+
+</Project>
