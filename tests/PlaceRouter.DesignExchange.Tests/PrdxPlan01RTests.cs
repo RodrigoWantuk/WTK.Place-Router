@@ -302,8 +302,10 @@ public sealed class PrdxPlan01RTests
         var loaded = store.Load(PrdxTestData.CreateFixturePrdx(temp.Path, project.ToJsonString()));
         Assert.True(loaded.Success, Messages(loaded.Diagnostics));
         var diagnostic = loaded.Project!.SourceImports.Single().LossDiagnostics.Single();
-        Assert.Equal("COMPONENT", diagnostic.EntityRefs!.Single().EntityType);
-        Assert.Equal("cmp_u1", diagnostic.EntityRefs.Single().EntityId);
+        Assert.NotNull(diagnostic.EntityRefs);
+        var entityRef = Assert.Single(diagnostic.EntityRefs);
+        Assert.Equal("COMPONENT", entityRef.EntityType);
+        Assert.Equal("cmp_u1", entityRef.EntityId);
         Assert.NotNull(diagnostic.Evidence);
         Assert.True(diagnostic.Evidence!.ContainsKey("nested"));
 
