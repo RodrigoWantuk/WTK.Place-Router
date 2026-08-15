@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Dock.Avalonia" />
+    <PackageReference Include="Dock.Model.Mvvm" />
+    <PackageReference Include="Dock.Controls.DeferredContentControl" />
+    <PackageReference Include="Dock.Avalonia.Themes.Fluent" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PlaceRouter.Application\PlaceRouter.Application.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Core\PlaceRouter.Core.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Domain\PlaceRouter.Domain.csproj" />
+    <ProjectReference Include="..\PlaceRouter.Geometry\PlaceRouter.Geometry.csproj" />
+  </ItemGroup>
+
+</Project>

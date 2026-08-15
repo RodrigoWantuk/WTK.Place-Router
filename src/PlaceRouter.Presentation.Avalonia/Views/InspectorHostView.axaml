@@ -1,0 +1,21 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PlaceRouter.Presentation.Views.InspectorHostView"
+             x:CompileBindings="False">
+  <Grid RowDefinitions="Auto,*" Margin="10">
+    <StackPanel Margin="0,0,0,10">
+      <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+      <TextBlock Text="{Binding Subtitle}" Opacity="0.72" FontSize="12" />
+    </StackPanel>
+    <ItemsControl Grid.Row="1" ItemsSource="{Binding Properties}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <Grid ColumnDefinitions="110,*" Margin="0,0,0,8">
+            <TextBlock Text="{Binding Name}" Opacity="0.68" />
+            <TextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" />
+          </Grid>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </Grid>
+</UserControl>

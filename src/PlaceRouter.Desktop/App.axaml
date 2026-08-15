@@ -1,0 +1,43 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dockFluent="using:Dock.Avalonia.Themes.Fluent"
+             xmlns:dockModel="using:Dock.Model.Mvvm.Controls"
+             xmlns:vm="using:PlaceRouter.Presentation.ViewModels"
+             xmlns:views="using:PlaceRouter.Presentation.Views"
+             x:Class="PlaceRouter.Desktop.App"
+             RequestedThemeVariant="Dark">
+  <Application.DataTemplates>
+    <DataTemplate DataType="{x:Type dockModel:Tool}">
+      <ContentControl Content="{Binding Context}" />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type dockModel:Document}">
+      <ContentControl Content="{Binding Context}" />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:DesignNavigatorViewModel}">
+      <views:DesignNavigatorView />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:BoardWorkspaceViewModel}">
+      <views:BoardWorkspaceView />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:ConstraintComposerViewModel}">
+      <views:ConstraintComposerView />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:InspectorHostViewModel}">
+      <views:InspectorHostView />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:BottomWorkbenchViewModel}">
+      <views:BottomWorkbenchView />
+    </DataTemplate>
+  </Application.DataTemplates>
+
+  <Application.Styles>
+    <FluentTheme />
+    <dockFluent:DockFluentTheme />
+    <Style Selector="Window">
+      <Setter Property="FontFamily" Value="Inter, Segoe UI" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+  </Application.Styles>
+</Application>

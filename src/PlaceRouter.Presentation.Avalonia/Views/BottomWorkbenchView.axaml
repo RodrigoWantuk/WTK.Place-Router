@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PlaceRouter.Presentation.Views.BottomWorkbenchView"
+             x:CompileBindings="False">
+  <TabControl Margin="8">
+    <TabItem Header="Findings">
+      <ListBox ItemsSource="{Binding Findings}">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Button Command="{Binding $parent[UserControl].DataContext.SelectFindingCommand}"
+                    CommandParameter="{Binding}"
+                    HorizontalAlignment="Stretch"
+                    Padding="6"
+                    Background="Transparent">
+              <Grid ColumnDefinitions="90,180,*" ColumnSpacing="10">
+                <TextBlock Text="{Binding Severity}" />
+                <TextBlock Grid.Column="1" Text="{Binding Title}" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" />
+              </Grid>
+            </Button>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </TabItem>
+    <TabItem Header="Diagnostics">
+      <ListBox ItemsSource="{Binding Diagnostics}">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="90,180,*" ColumnSpacing="10" Margin="4">
+              <TextBlock Text="{Binding Severity}" />
+              <TextBlock Grid.Column="1" Text="{Binding Title}" FontWeight="SemiBold" />
+              <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </TabItem>
+    <TabItem Header="Routing">
+      <ListBox ItemsSource="{Binding Routing}" />
+    </TabItem>
+    <TabItem Header="Optimization">
+      <TextBlock Text="Sem runs" Margin="10" Opacity="0.72" />
+    </TabItem>
+    <TabItem Header="Metrics">
+      <ListBox ItemsSource="{Binding Metrics}" />
+    </TabItem>
+    <TabItem Header="Log">
+      <TextBlock Text="Log" Margin="10" Opacity="0.72" />
+    </TabItem>
+  </TabControl>
+</UserControl>

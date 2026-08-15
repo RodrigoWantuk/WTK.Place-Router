@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PlaceRouter.Application\PlaceRouter.Application.csproj" />
+    <ProjectReference Include="..\..\src\PlaceRouter.Core\PlaceRouter.Core.csproj" />
+    <ProjectReference Include="..\..\src\PlaceRouter.DesignExchange\PlaceRouter.DesignExchange.csproj" />
+    <ProjectReference Include="..\..\src\PlaceRouter.Domain\PlaceRouter.Domain.csproj" />
+    <ProjectReference Include="..\..\src\PlaceRouter.Geometry\PlaceRouter.Geometry.csproj" />
+    <ProjectReference Include="..\..\src\PlaceRouter.Presentation.Avalonia\PlaceRouter.Presentation.Avalonia.csproj" />
+  </ItemGroup>
+
+</Project>

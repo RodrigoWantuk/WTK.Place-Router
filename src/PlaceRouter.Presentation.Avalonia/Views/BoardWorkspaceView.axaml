@@ -1,0 +1,17 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:PlaceRouter.Presentation.Views"
+             x:Class="PlaceRouter.Presentation.Views.BoardWorkspaceView"
+             x:CompileBindings="False">
+  <Grid RowDefinitions="34,*">
+    <Border Background="#242A30" BorderBrush="#39424C" BorderThickness="0,0,0,1" Padding="8,0">
+      <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Content="Fit" Command="{Binding FitBoardCommand}" Padding="10,3" />
+        <TextBlock Text="PCB Viewport" VerticalAlignment="Center" Opacity="0.82" />
+      </StackPanel>
+    </Border>
+    <views:PcbViewportControl Grid.Row="1"
+                              Snapshot="{Binding Snapshot}"
+                              EntitySelectedCommand="{Binding SelectEntityCommand}" />
+  </Grid>
+</UserControl>

@@ -1,0 +1,27 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PlaceRouter.Presentation.Views.ConstraintComposerView"
+             x:CompileBindings="False">
+  <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10" Margin="10">
+    <TextBlock Text="Constraint Composer" FontWeight="SemiBold" />
+    <Grid Grid.Row="1" RowDefinitions="Auto,Auto" ColumnDefinitions="80,*" RowSpacing="6">
+      <TextBlock Text="Source" Opacity="0.7" />
+      <TextBlock Grid.Column="1" Text="{Binding Source}" />
+      <TextBlock Grid.Row="1" Text="Target" Opacity="0.7" />
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Target}" />
+    </Grid>
+    <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="8">
+      <ComboBox SelectedItem="{Binding ConstraintType}" SelectedIndex="0">
+        <ComboBoxItem>MinimumSeparation</ComboBoxItem>
+        <ComboBoxItem>MinimumClearance</ComboBoxItem>
+        <ComboBoxItem>AllowedSide</ComboBoxItem>
+      </ComboBox>
+      <ComboBox Grid.Column="1" SelectedItem="{Binding Enforcement}" SelectedIndex="0">
+        <ComboBoxItem>REQUIRED</ComboBoxItem>
+        <ComboBoxItem>PREFERRED</ComboBoxItem>
+        <ComboBoxItem>OPTIMIZATION_GOAL</ComboBoxItem>
+      </ComboBox>
+    </Grid>
+    <TextBlock Grid.Row="3" Text="{Binding Summary}" TextWrapping="Wrap" Opacity="0.78" />
+  </Grid>
+</UserControl>

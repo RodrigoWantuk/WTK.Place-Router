@@ -1,0 +1,13 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PlaceRouter.Presentation.Views.StatusBarView"
+             x:CompileBindings="False">
+  <Border Background="#1C2025" BorderBrush="#39424C" BorderThickness="0,1,0,0" Padding="10,0">
+    <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="18">
+      <TextBlock Text="{Binding ProjectName}" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="1" Text="{Binding Readiness}" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="2" Text="{Binding Candidate}" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="3" Text="{Binding Diagnostics}" VerticalAlignment="Center" Opacity="0.72" />
+    </Grid>
+  </Border>
+</UserControl>

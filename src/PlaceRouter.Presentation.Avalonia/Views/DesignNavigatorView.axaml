@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PlaceRouter.Presentation.Views.DesignNavigatorView"
+             x:CompileBindings="False">
+  <Grid RowDefinitions="Auto,*" Margin="10">
+    <TextBlock Text="Design Navigator" FontWeight="SemiBold" Margin="0,0,0,8" />
+    <TabControl Grid.Row="1">
+      <TabItem Header="Components">
+        <ListBox ItemsSource="{Binding Components}">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <Button Command="{Binding $parent[UserControl].DataContext.SelectCommand}"
+                      CommandParameter="{Binding}"
+                      HorizontalAlignment="Stretch"
+                      Padding="6"
+                      Background="Transparent">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel>
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Subtitle}" Opacity="0.72" FontSize="12" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="1" Text="{Binding Badge}" Opacity="0.75" />
+                </Grid>
+              </Button>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+      <TabItem Header="Nets">
+        <ListBox ItemsSource="{Binding Nets}">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <Button Command="{Binding $parent[UserControl].DataContext.SelectCommand}" CommandParameter="{Binding}" HorizontalAlignment="Stretch" Padding="6" Background="Transparent">
+                <StackPanel>
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Subtitle}" Opacity="0.72" FontSize="12" />
+                </StackPanel>
+              </Button>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+      <TabItem Header="Groups">
+        <ListBox ItemsSource="{Binding Groups}" />
+      </TabItem>
+      <TabItem Header="Rules">
+        <ListBox ItemsSource="{Binding Constraints}">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <Button Command="{Binding $parent[UserControl].DataContext.SelectCommand}" CommandParameter="{Binding}" HorizontalAlignment="Stretch" Padding="6" Background="Transparent">
+                <StackPanel>
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Subtitle}" Opacity="0.72" FontSize="12" />
+                </StackPanel>
+              </Button>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+    </TabControl>
+  </Grid>
+</UserControl>
