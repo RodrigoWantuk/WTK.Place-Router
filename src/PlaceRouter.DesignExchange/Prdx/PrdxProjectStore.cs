@@ -249,7 +249,15 @@ public sealed class PrdxProjectStore(
             }
 
             _committer.Commit(tempPath, fullPath);
-            return new ProjectSaveResult([]);
+            var savedDocument = tempLoad.Document! with
+            {
+                FileContext = tempLoad.Document.FileContext with
+                {
+                    SourcePath = fullPath,
+                    PendingSupplementaryFiles = []
+                }
+            };
+            return new ProjectSaveResult([], savedDocument);
         }
         catch (Exception ex)
         {

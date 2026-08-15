@@ -92,9 +92,10 @@ public sealed class SpecctraDsnImporter : IDesignImporter
     {
         var name = root.AtomAt(1) ?? Path.GetFileNameWithoutExtension(sourcePath);
         var projectId = new ProjectId("prj_" + StableToken(name + "_" + sourceHash[..12]));
-        var layers = ReadLayers(root).ToArray();
+        var units = ReadUnits(root);
+        var layers = ReadLayers(root, losses).ToArray();
         var layerByName = layers.ToDictionary(l => l.Name, l => l.Id, StringComparer.OrdinalIgnoreCase);
-        var outline = ReadOutline(root);
+        var outline = ReadOutline(root, units);
         var components = new List<Component>();
         var poses = new List<ComponentPose>();
         var footprints = new Dictionary<string, Footprint>(StringComparer.Ordinal);
@@ -110,7 +111,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             var componentId = new ComponentId("cmp_" + StableToken(reference));
             var pads = footprintId is null
                 ? []
-                : ReadPads(componentNode, footprintId.Value, layerByName, losses).ToArray();
+                : ReadPads(componentNode, footprintId.Value, layerByName, units, losses).ToArray();
             if (footprintId is not null && !footprints.ContainsKey(footprintId.Value.Value))
             {
                 footprints[footprintId.Value.Value] = new Footprint(
@@ -151,8 +152,8 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 continue;
             }
 
-            if (!TryRequiredUnit(place, 1, $"Component '{reference}' placement X is missing; no ComponentPose was created.", losses, "componentPlacement", out var x) ||
-                !TryRequiredUnit(place, 2, $"Component '{reference}' placement Y is missing; no ComponentPose was created.", losses, "componentPlacement", out var y))
+            if (!TryRequiredUnit(place, 1, units, $"Component '{reference}' placement X is missing; no ComponentPose was created.", losses, "componentPlacement", out var x) ||
+                !TryRequiredUnit(place, 2, units, $"Component '{reference}' placement Y is missing; no ComponentPose was created.", losses, "componentPlacement", out var y))
             {
                 continue;
             }
@@ -171,13 +172,24 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 continue;
             }
 
-            var side = sideAtom.Equals("back", StringComparison.OrdinalIgnoreCase) ? "BOTTOM" : "TOP";
+            var side = sideAtom.ToLowerInvariant() switch
+            {
+                "front" or "top" => "TOP",
+                "back" or "bottom" => "BOTTOM",
+                _ => null
+            };
+            if (side is null)
+            {
+                AddLoss(losses, "componentPlacement", $"Component '{reference}' placement side '{sideAtom}' is unsupported; no ComponentPose was created.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
             var rotation = decimal.Parse(rotationAtom, System.Globalization.CultureInfo.InvariantCulture);
             poses.Add(new ComponentPose(componentId, new Point2(x, y), new AngleDegrees(rotation), side, "PLACED", AdapterId));
         }
 
         var nets = ReadNets(root, componentPadIds).ToArray();
-        var rules = ReadRules(root);
+        var rules = ReadRules(root, units);
         SetCapabilities(capabilities, outline, layers, components, footprints.Values.ToArray(), poses, nets, rules, losses);
         var manufacturing = new ManufacturingProfile(
             new StableId("mfg_imported_" + sourceHash[..8]),
@@ -236,19 +248,53 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             JsonDefaults.EmptyObject);
     }
 
-    private static IReadOnlyList<BoardLayer> ReadLayers(SExpression root)
+    private static UnitScale ReadUnits(SExpression root)
+    {
+        var unit = root.Child("unit")?.AtomAt(1)
+            ?? throw new InvalidDataException("DSN source did not declare '(unit ...)'.");
+        return unit.ToLowerInvariant() switch
+        {
+            "um" or "micron" or "microns" => new UnitScale(unit, 1m),
+            "mm" => new UnitScale(unit, 1000m),
+            "mil" or "mils" => new UnitScale(unit, 25.4m),
+            "inch" or "in" => new UnitScale(unit, 25_400m),
+            _ => throw new InvalidDataException($"DSN unit '{unit}' is not supported.")
+        };
+    }
+
+    private static IReadOnlyList<BoardLayer> ReadLayers(SExpression root, List<Diagnostic> losses)
     {
         return root.Descendants("layer")
             .Select((node, index) =>
             {
                 var name = node.AtomAt(1) ?? throw new InvalidDataException("Layer without name.");
-                var type = (node.AtomAt(2) ?? "signal").Equals("plane", StringComparison.OrdinalIgnoreCase) ? "COPPER_PLANE" : "COPPER_SIGNAL";
+                var typeAtom = node.AtomAt(2);
+                if (typeAtom is null)
+                {
+                    AddLoss(losses, "layers", $"Layer '{name}' did not provide a type; layer was not imported.", DiagnosticSeverity.Warning);
+                    return null;
+                }
+
+                var type = typeAtom.ToLowerInvariant() switch
+                {
+                    "signal" => "COPPER_SIGNAL",
+                    "plane" => "COPPER_PLANE",
+                    _ => null
+                };
+                if (type is null)
+                {
+                    AddLoss(losses, "layers", $"Layer '{name}' uses unsupported type '{typeAtom}'; layer was not imported.", DiagnosticSeverity.Warning);
+                    return null;
+                }
+
                 return new BoardLayer(LayerIdFor(name), name, type, index + 1, null, SourcedValue.Unknown(), new Dictionary<string, SourcedValue>(StringComparer.Ordinal));
             })
+            .Where(layer => layer is not null)
+            .Select(layer => layer!)
             .ToArray();
     }
 
-    private static Polygon2? ReadOutline(SExpression root)
+    private static Polygon2? ReadOutline(SExpression root, UnitScale units)
     {
         var path = root.Descendants("boundary").SelectMany(b => b.Children.Where(c => c.IsList("path"))).FirstOrDefault()
             ?? root.Descendants("path").FirstOrDefault();
@@ -257,7 +303,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             return null;
         }
 
-        var numbers = path.Items.Skip(2).Where(i => i.IsAtom).Select(i => Unit(i.Value).Value).ToArray();
+        var numbers = path.Items.Skip(2).Where(i => i.IsAtom).Select(i => Unit(i.Value, units).Value).ToArray();
         if (numbers.Length < 6 || numbers.Length % 2 != 0)
         {
             throw new InvalidDataException("Boundary path must contain at least three coordinate pairs.");
@@ -272,7 +318,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         return new Polygon2(points, []);
     }
 
-    private static IEnumerable<Pad> ReadPads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName, List<Diagnostic> losses)
+    private static IEnumerable<Pad> ReadPads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName, UnitScale units, List<Diagnostic> losses)
     {
         foreach (var pad in componentNode.Children.Where(c => c.IsList("pad")))
         {
@@ -291,7 +337,18 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 continue;
             }
 
-            var padType = padTypeAtom.Equals("thru", StringComparison.OrdinalIgnoreCase) ? "THROUGH_HOLE" : "SMD";
+            var padType = padTypeAtom.ToLowerInvariant() switch
+            {
+                "smd" => "SMD",
+                "thru" or "through" or "through_hole" => "THROUGH_HOLE",
+                _ => null
+            };
+            if (padType is null)
+            {
+                AddLoss(losses, "pads", $"Pad '{number}' uses unsupported type '{padTypeAtom}'; pad was not imported.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
             string shape;
             switch (shapeAtom.ToUpperInvariant())
             {
@@ -310,20 +367,20 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                     continue;
             }
 
-            if (!TryRequiredUnit(pad, 4, $"Pad '{number}' position X is missing; pad was not imported.", losses, "pads", out var x) ||
-                !TryRequiredUnit(pad, 5, $"Pad '{number}' position Y is missing; pad was not imported.", losses, "pads", out var y))
+            if (!TryRequiredUnit(pad, 4, units, $"Pad '{number}' position X is missing; pad was not imported.", losses, "pads", out var x) ||
+                !TryRequiredUnit(pad, 5, units, $"Pad '{number}' position Y is missing; pad was not imported.", losses, "pads", out var y))
             {
                 continue;
             }
 
-            var sizeX = OptionalUnit(pad.AtomAt(6));
+            var sizeX = OptionalUnit(pad.AtomAt(6), units);
             if (sizeX is null)
             {
                 AddLoss(losses, "pads", $"Pad '{number}' size X is missing; pad was not imported.", DiagnosticSeverity.Warning);
                 continue;
             }
 
-            var sizeY = OptionalUnit(pad.AtomAt(7));
+            var sizeY = OptionalUnit(pad.AtomAt(7), units);
             if (sizeY is null && shape is not "CIRCLE")
             {
                 AddLoss(losses, "pads", $"Pad '{number}' size Y is missing; pad was not imported.", DiagnosticSeverity.Warning);
@@ -394,7 +451,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             .ToArray();
     }
 
-    private static IReadOnlyDictionary<string, SourcedValue> ReadRules(SExpression root)
+    private static IReadOnlyDictionary<string, SourcedValue> ReadRules(SExpression root, UnitScale units)
     {
         var rules = root.Descendants("rules").FirstOrDefault();
         var values = new Dictionary<string, SourcedValue>(StringComparer.Ordinal);
@@ -418,7 +475,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 return;
             }
 
-            values[capabilityKey] = KnownNumber(Unit(raw).Value);
+            values[capabilityKey] = KnownNumber(Unit(raw, units).Value);
         }
     }
 
@@ -462,17 +519,17 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         return string.IsNullOrWhiteSpace(token) ? "unnamed" : token;
     }
 
-    private static LengthUnits Unit(string value) =>
-        new(long.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
-
-    private static LengthUnits RequiredUnit(SExpression node, int atomIndex, string message) =>
-        node.AtomAt(atomIndex) is { } value
-            ? Unit(value)
-            : throw new InvalidDataException(message);
+    private static LengthUnits Unit(string value, UnitScale units)
+    {
+        var raw = decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        var micrometers = decimal.ToInt64(decimal.Round(raw * units.MicrometersPerUnit, 0, MidpointRounding.AwayFromZero));
+        return new LengthUnits(micrometers);
+    }
 
     private static bool TryRequiredUnit(
         SExpression node,
         int atomIndex,
+        UnitScale units,
         string message,
         List<Diagnostic> losses,
         string capability,
@@ -480,7 +537,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
     {
         if (node.AtomAt(atomIndex) is { } raw)
         {
-            value = Unit(raw);
+            value = Unit(raw, units);
             return true;
         }
 
@@ -489,8 +546,10 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         return false;
     }
 
-    private static LengthUnits? OptionalUnit(string? value) =>
-        value is null ? null : Unit(value);
+    private static LengthUnits? OptionalUnit(string? value, UnitScale units) =>
+        value is null ? null : Unit(value, units);
+
+    private sealed record UnitScale(string Name, decimal MicrometersPerUnit);
 
     private static Point2 ZeroPoint() => new(LengthUnits.FromMicrometers(0), LengthUnits.FromMicrometers(0));
 

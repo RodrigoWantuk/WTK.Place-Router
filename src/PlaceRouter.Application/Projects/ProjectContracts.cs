@@ -33,7 +33,7 @@ public sealed record ProjectLoadResult(ProjectDocument? Document, IReadOnlyList<
     public CanonicalProject? Project => Document?.Project;
 }
 
-public sealed record ProjectSaveResult(IReadOnlyList<Diagnostic> Diagnostics)
+public sealed record ProjectSaveResult(IReadOnlyList<Diagnostic> Diagnostics, ProjectDocument? Document = null)
 {
     public bool Success => !Diagnostics.HasBlockingDiagnostics();
 }

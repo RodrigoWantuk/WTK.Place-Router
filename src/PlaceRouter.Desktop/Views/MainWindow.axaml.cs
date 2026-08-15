@@ -26,13 +26,18 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        if (_closeAccepted || _closePromptInFlight || DataContext is not PlaceRouterShellViewModel { HasDirtyProject: true } shell)
+        if (_closeAccepted || DataContext is not PlaceRouterShellViewModel { HasDirtyProject: true } shell)
         {
             base.OnClosing(e);
             return;
         }
 
         e.Cancel = true;
+        if (_closePromptInFlight)
+        {
+            return;
+        }
+
         _closePromptInFlight = true;
         _ = ConfirmSaveBeforeClose(shell).ContinueWith(task =>
         {
@@ -57,6 +62,14 @@ public partial class MainWindow : Window
         }
 
         base.OnClosed(e);
+    }
+
+    private async void NewProject_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is PlaceRouterShellViewModel shell && await ConfirmSaveBeforeClose(shell).ConfigureAwait(true))
+        {
+            shell.NewProject();
+        }
     }
 
     private async void OpenProject_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -87,6 +100,11 @@ public partial class MainWindow : Window
     private async void ImportDsn_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is not PlaceRouterShellViewModel shell)
+        {
+            return;
+        }
+
+        if (!await ConfirmSaveBeforeClose(shell).ConfigureAwait(true))
         {
             return;
         }
@@ -218,8 +236,6 @@ internal enum DirtyProjectChoice
 
 internal sealed class DirtyProjectDialog : Window
 {
-    private readonly TaskCompletionSource<DirtyProjectChoice> _completion = new();
-
     private DirtyProjectDialog()
     {
         Width = 420;
@@ -233,10 +249,11 @@ internal sealed class DirtyProjectDialog : Window
     public static Task<DirtyProjectChoice> ShowAsync(Window owner)
     {
         var dialog = new DirtyProjectDialog();
-        dialog.Closed += (_, _) => dialog._completion.TrySetResult(DirtyProjectChoice.Cancel);
-        dialog.Show(owner);
-        return dialog._completion.Task;
+        return ShowModal(dialog, owner);
     }
+
+    private static async Task<DirtyProjectChoice> ShowModal(DirtyProjectDialog dialog, Window owner) =>
+        await dialog.ShowDialog<DirtyProjectChoice?>(owner).ConfigureAwait(true) ?? DirtyProjectChoice.Cancel;
 
     private Control BuildContent()
     {
@@ -272,8 +289,7 @@ internal sealed class DirtyProjectDialog : Window
         var button = new Button { Content = text, MinWidth = 86 };
         button.Click += (_, _) =>
         {
-            _completion.TrySetResult(choice);
-            Close();
+            Close(choice);
         };
         buttons.Children.Add(button);
         Grid.SetRow(buttons, 1);

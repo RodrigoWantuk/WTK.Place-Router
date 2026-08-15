@@ -202,7 +202,7 @@ public sealed class ProjectCoordinator
 
     private void Attach(ProjectDocument document, string? path, IReadOnlyList<Diagnostic> diagnostics, bool dirty)
     {
-        Session = new ProjectSession(document, _journal);
+        Session = new ProjectSession(document, _journal, _projectService.Validator);
         if (dirty)
         {
             Session.MarkDirty();

@@ -58,7 +58,7 @@ public sealed record RecoveryResult(
     EditImpact Impact,
     IReadOnlyList<Diagnostic> Diagnostics);
 
-public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? journal = null)
+public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? journal = null, ICanonicalProjectValidator? validator = null)
 {
     private readonly Stack<CommittedTransaction> _undo = new();
     private readonly Stack<CommittedTransaction> _redo = new();
@@ -102,10 +102,13 @@ public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? j
 
         var committed = _undo.Pop();
         _redo.Push(committed);
-        Document = committed.Before;
-        IsDirty = true;
+        var physicalChanged = committed.Diff.BasePhysicalStateRevision != committed.Diff.CandidatePhysicalStateRevision;
+        var restored = WithAcceptedRevision(committed.Before.Project, Document.Project, physicalChanged, "undo");
+        var action = new RestoreProjectSnapshotAction(restored, physicalChanged);
+        var diff = PhysicalDesignTransaction.BuildDiff(Document.Project, restored, "undo: " + committed.Diff.Reason, "undo", [new EntityReference("PROJECT", restored.ProjectId.Value)]);
+        CommitSnapshot(Document, Document with { Project = restored }, diff, [action], recordUndo: false, clearRedo: false);
         var planner = impactPlanner ?? new EditImpactPlanner();
-        var impact = planner.Plan(committed.Diff, DependencyGraph.From(Document.Project));
+        var impact = planner.Plan(diff, DependencyGraph.From(Document.Project));
         return (recoveryPlanner ?? new RecoveryPlanner()).Recover(Document.Project, impact);
     }
 
@@ -117,11 +120,15 @@ public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? j
         }
 
         var committed = _redo.Pop();
-        _undo.Push(committed);
-        Document = committed.After;
-        IsDirty = true;
+        var before = Document;
+        var physicalChanged = committed.Diff.BasePhysicalStateRevision != committed.Diff.CandidatePhysicalStateRevision;
+        var restored = WithAcceptedRevision(committed.After.Project, Document.Project, physicalChanged, "redo");
+        var action = new RestoreProjectSnapshotAction(restored, physicalChanged);
+        var after = Document with { Project = restored };
+        var diff = PhysicalDesignTransaction.BuildDiff(Document.Project, restored, "redo: " + committed.Diff.Reason, "redo", [new EntityReference("PROJECT", restored.ProjectId.Value)]);
+        CommitSnapshot(before, after, diff, [action], recordUndo: true, clearRedo: false);
         var planner = impactPlanner ?? new EditImpactPlanner();
-        var impact = planner.Plan(committed.Diff, DependencyGraph.From(Document.Project));
+        var impact = planner.Plan(diff, DependencyGraph.From(Document.Project));
         return (recoveryPlanner ?? new RecoveryPlanner()).Recover(Document.Project, impact);
     }
 
@@ -130,6 +137,7 @@ public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? j
         var result = store.Save(Document, path);
         if (result.Success)
         {
+            Document = result.Document ?? Document;
             IsDirty = false;
             journal?.Clear(Document.Project.ProjectId);
         }
@@ -139,11 +147,64 @@ public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? j
 
     internal void Commit(ProjectDocument before, ProjectDocument after, TransactionDiff diff, IReadOnlyList<IPhysicalEditAction> actions)
     {
+        CommitSnapshot(before, after, diff, actions, recordUndo: true, clearRedo: true);
+    }
+
+    private void CommitSnapshot(
+        ProjectDocument before,
+        ProjectDocument after,
+        TransactionDiff diff,
+        IReadOnlyList<IPhysicalEditAction> actions,
+        bool recordUndo,
+        bool clearRedo)
+    {
+        var validation = validator?.Validate(after.Project);
+        if (validation is { Success: false })
+        {
+            var messages = string.Join(Environment.NewLine, validation.Diagnostics.Select(d => $"{d.Code}: {d.Message}"));
+            throw new InvalidOperationException("Transaction would create a structurally invalid canonical project." + Environment.NewLine + messages);
+        }
+
         Document = after;
         IsDirty = true;
-        _undo.Push(new CommittedTransaction(before, after, diff, actions.ToArray()));
-        _redo.Clear();
+        if (recordUndo)
+        {
+            _undo.Push(new CommittedTransaction(before, after, diff, actions.ToArray()));
+        }
+
+        if (clearRedo)
+        {
+            _redo.Clear();
+        }
+
         journal?.Append(after.Project.ProjectId, diff.BaseProjectRevision, actions);
+    }
+
+    private static CanonicalProject WithAcceptedRevision(CanonicalProject snapshot, CanonicalProject current, bool physicalChanged, string source)
+    {
+        var projectRevision = current.ProjectRevision + 1;
+        var now = DateTimeOffset.UtcNow;
+        var project = snapshot with
+        {
+            ProjectRevision = projectRevision,
+            Metadata = snapshot.Metadata with { ModifiedAt = now }
+        };
+
+        if (!physicalChanged)
+        {
+            return project;
+        }
+
+        return project with
+        {
+            PhysicalDesignState = project.PhysicalDesignState with
+            {
+                StateRevision = current.PhysicalDesignState.StateRevision + 1,
+                BasedOnProjectRevision = projectRevision,
+                LastModifiedAt = now,
+                LastModifiedBy = source
+            }
+        };
     }
 
     private sealed record CommittedTransaction(
@@ -159,6 +220,7 @@ public sealed class PhysicalDesignTransaction
     private readonly string _reason;
     private readonly string _source;
     private readonly List<IPhysicalEditAction> _actions = [];
+    private readonly List<EntityReference> _directChanges = [];
     private CanonicalProject _candidate;
     private bool _committed;
     private bool _rolledBack;
@@ -173,7 +235,7 @@ public sealed class PhysicalDesignTransaction
 
     public IReadOnlyList<IPhysicalEditAction> Actions => _actions;
 
-    public TransactionDiff Diff => BuildDiff(_session.Document.Project, _candidate, _reason, _source);
+    public TransactionDiff Diff => BuildDiff(_session.Document.Project, _candidate, _reason, _source, _directChanges);
 
     public void Apply(IPhysicalEditAction action)
     {
@@ -182,7 +244,9 @@ public sealed class PhysicalDesignTransaction
             throw new InvalidOperationException("Transaction is no longer active.");
         }
 
-        _candidate = action.Apply(_candidate).Project;
+        var applied = action.Apply(_candidate);
+        _candidate = applied.Project;
+        _directChanges.AddRange(applied.DirectChanges);
         _actions.Add(action);
     }
 
@@ -219,7 +283,7 @@ public sealed class PhysicalDesignTransaction
         }
 
         var document = _session.Document with { Project = project };
-        return (document, BuildDiff(baseProject, project, _reason, _source));
+        return (document, BuildDiff(baseProject, project, _reason, _source, _directChanges));
     }
 
     public ProjectDocument Rollback()
@@ -227,10 +291,16 @@ public sealed class PhysicalDesignTransaction
         _rolledBack = true;
         _candidate = _session.Document.Project;
         _actions.Clear();
+        _directChanges.Clear();
         return _session.Document;
     }
 
-    private static TransactionDiff BuildDiff(CanonicalProject before, CanonicalProject after, string reason, string source)
+    internal static TransactionDiff BuildDiff(
+        CanonicalProject before,
+        CanonicalProject after,
+        string reason,
+        string source,
+        IEnumerable<EntityReference>? actionDirectChanges = null)
     {
         var affectedComponents = ChangedComponents(before, after);
         var affectedNets = AffectedNets(after, affectedComponents);
@@ -238,6 +308,7 @@ public sealed class PhysicalDesignTransaction
         var affectedConstraints = ChangedConstraints(before, after);
         var affectedRoutes = AffectedRoutingResources(after, affectedNets);
         var directChanges = new List<EntityReference>();
+        directChanges.AddRange(actionDirectChanges ?? []);
         directChanges.AddRange(affectedComponents);
         directChanges.AddRange(ChangedGroups(before, after));
         directChanges.AddRange(affectedRegions);
@@ -273,9 +344,11 @@ public sealed class PhysicalDesignTransaction
     private static IReadOnlyList<EntityReference> ChangedComponents(CanonicalProject before, CanonicalProject after)
     {
         var beforePoses = before.PhysicalDesignState.ComponentPoses.ToDictionary(p => p.ComponentId.Value, StringComparer.Ordinal);
-        return after.PhysicalDesignState.ComponentPoses
-            .Where(p => !beforePoses.TryGetValue(p.ComponentId.Value, out var previous) || !Equals(previous, p))
-            .Select(p => new EntityReference("COMPONENT", p.ComponentId.Value))
+        var afterPoses = after.PhysicalDesignState.ComponentPoses.ToDictionary(p => p.ComponentId.Value, StringComparer.Ordinal);
+        return beforePoses.Keys.Concat(afterPoses.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !beforePoses.TryGetValue(id, out var previous) || !afterPoses.TryGetValue(id, out var current) || !Equals(previous, current))
+            .Select(id => new EntityReference("COMPONENT", id))
             .ToArray();
     }
 
@@ -292,27 +365,33 @@ public sealed class PhysicalDesignTransaction
     private static IReadOnlyList<EntityReference> ChangedConstraints(CanonicalProject before, CanonicalProject after)
     {
         var beforeConstraints = before.Constraints.ToDictionary(c => c.Id.Value, StringComparer.Ordinal);
-        return after.Constraints
-            .Where(c => !beforeConstraints.TryGetValue(c.Id.Value, out var previous) || !Equals(previous, c))
-            .Select(c => new EntityReference("CONSTRAINT", c.Id.Value))
+        var afterConstraints = after.Constraints.ToDictionary(c => c.Id.Value, StringComparer.Ordinal);
+        return beforeConstraints.Keys.Concat(afterConstraints.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !beforeConstraints.TryGetValue(id, out var previous) || !afterConstraints.TryGetValue(id, out var current) || !Equals(previous, current))
+            .Select(id => new EntityReference("CONSTRAINT", id))
             .ToArray();
     }
 
     private static IReadOnlyList<EntityReference> ChangedGroups(CanonicalProject before, CanonicalProject after)
     {
         var beforeGroups = before.LogicalDesign.Groups.ToDictionary(g => g.Id.Value, StringComparer.Ordinal);
-        return after.LogicalDesign.Groups
-            .Where(g => !beforeGroups.TryGetValue(g.Id.Value, out var previous) || !Equals(previous, g))
-            .Select(g => new EntityReference("GROUP", g.Id.Value))
+        var afterGroups = after.LogicalDesign.Groups.ToDictionary(g => g.Id.Value, StringComparer.Ordinal);
+        return beforeGroups.Keys.Concat(afterGroups.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !beforeGroups.TryGetValue(id, out var previous) || !afterGroups.TryGetValue(id, out var current) || !Equals(previous, current))
+            .Select(id => new EntityReference("GROUP", id))
             .ToArray();
     }
 
     private static IReadOnlyList<EntityReference> ChangedRegions(CanonicalProject before, CanonicalProject after)
     {
         var beforeRegions = before.Board.Regions.ToDictionary(r => r.Id.Value, StringComparer.Ordinal);
-        return after.Board.Regions
-            .Where(r => !beforeRegions.TryGetValue(r.Id.Value, out var previous) || !Equals(previous, r))
-            .Select(r => new EntityReference("REGION", r.Id.Value))
+        var afterRegions = after.Board.Regions.ToDictionary(r => r.Id.Value, StringComparer.Ordinal);
+        return beforeRegions.Keys.Concat(afterRegions.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !beforeRegions.TryGetValue(id, out var previous) || !afterRegions.TryGetValue(id, out var current) || !Equals(previous, current))
+            .Select(id => new EntityReference("REGION", id))
             .ToArray();
     }
 
@@ -553,6 +632,29 @@ public sealed record DeleteRegionAction(RegionId RegionId) : IPhysicalEditAction
     public JournalAction ToJournalAction() => new("DeleteRegion", RegionId.Value, null, null, null, null, null);
 }
 
+public sealed record RestoreProjectSnapshotAction(CanonicalProject Project, bool PhysicalChanged) : IPhysicalEditAction
+{
+    public bool ChangesPhysicalState => PhysicalChanged;
+    public bool ChangesManufacturingRules => true;
+    public bool ChangesConstraints => true;
+
+    public AppliedProjectChange Apply(CanonicalProject project)
+    {
+        var restored = Project with
+        {
+            ProjectRevision = project.ProjectRevision,
+            PhysicalDesignState = Project.PhysicalDesignState with
+            {
+                StateRevision = project.PhysicalDesignState.StateRevision,
+                BasedOnProjectRevision = project.PhysicalDesignState.BasedOnProjectRevision
+            }
+        };
+        return new AppliedProjectChange(restored, [new EntityReference("PROJECT", project.ProjectId.Value)]);
+    }
+
+    public JournalAction ToJournalAction() => new("RestoreProjectSnapshot", Project.ProjectId.Value, null, null, null, PhysicalChanged ? "PHYSICAL" : "LOGICAL", JsonSerializer.Serialize(Project));
+}
+
 public sealed record DependencyGraph(
     IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> ComponentNets,
     IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> NetComponents,
@@ -624,6 +726,23 @@ public sealed record DependencyGraph(
             Add(regionEntities, region.Id.Value, new EntityReference("REGION", region.Id.Value));
         }
 
+        var spatialNeighborhood = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        foreach (var net in project.LogicalDesign.Nets)
+        {
+            var componentsOnNet = net.Endpoints
+                .Select(e => new EntityReference("COMPONENT", e.ComponentId.Value))
+                .DistinctBy(r => r.EntityId)
+                .ToArray();
+            var routesOnNet = netRoutes.TryGetValue(net.Id.Value, out var routes) ? routes : [];
+            foreach (var component in componentsOnNet)
+            {
+                foreach (var neighbor in componentsOnNet.Where(c => c.EntityId != component.EntityId).Concat(routesOnNet))
+                {
+                    Add(spatialNeighborhood, Key(component), neighbor);
+                }
+            }
+        }
+
         return new DependencyGraph(
             componentNets.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
             netComponents.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
@@ -634,7 +753,7 @@ public sealed record DependencyGraph(
             entityConstraints.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
             regionConstraints.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
             regionEntities.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
-            new Dictionary<string, IReadOnlyList<EntityReference>>(StringComparer.Ordinal));
+            spatialNeighborhood.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal));
 
         static void Add(Dictionary<string, List<EntityReference>> map, string key, EntityReference value)
         {
@@ -676,13 +795,14 @@ public sealed class EditImpactPlanner : IEditImpactPlanner
 {
     public EditImpact Plan(TransactionDiff diff, DependencyGraph graph)
     {
-        if (diff.DirectChanges.All(r => r.EntityType == "PROJECT_METADATA"))
+        if (diff.DirectChanges.Count > 0 && diff.DirectChanges.All(r => r.EntityType == "PROJECT_METADATA"))
         {
             return new EditImpact(DerivedArtifactStage.None, [], diff.DirectChanges, []);
         }
 
+        var scope = ExpandScope(diff, graph).ToArray();
         var stages = new List<DerivedArtifactStage>();
-        if (diff.DirectChanges.Any(r => r.EntityType == "COMPONENT" || r.EntityType == "REGION" || r.EntityType == "GROUP"))
+        if (scope.Any(r => r.EntityType == "COMPONENT" || r.EntityType == "REGION" || r.EntityType == "GROUP" || r.EntityType == "NET" || r.EntityType == "ROUTE"))
         {
             stages.AddRange([
                 DerivedArtifactStage.AbsoluteGeometry,
@@ -699,7 +819,7 @@ public sealed class EditImpactPlanner : IEditImpactPlanner
             ]);
         }
 
-        if (diff.DirectChanges.Any(r => r.EntityType == "MANUFACTURING_PROFILE" || r.EntityType == "CONSTRAINT"))
+        if (scope.Any(r => r.EntityType == "MANUFACTURING_PROFILE" || r.EntityType == "CONSTRAINT"))
         {
             stages.AddRange([
                 DerivedArtifactStage.ConstraintResolution,
@@ -714,9 +834,6 @@ public sealed class EditImpactPlanner : IEditImpactPlanner
 
         var distinctStages = stages.Distinct().ToArray();
         var earliest = distinctStages.Length == 0 ? DerivedArtifactStage.CanonicalIntegrity : distinctStages.Min();
-        var scope = diff.DirectChanges.Concat(diff.AffectedNets).Concat(diff.AffectedRegions).Concat(diff.AffectedRoutingResources)
-            .DistinctBy(r => r.EntityType + "\u001f" + r.EntityId)
-            .ToArray();
         var steps = distinctStages
             .Select(s => s switch
             {
@@ -730,6 +847,87 @@ public sealed class EditImpactPlanner : IEditImpactPlanner
 
         return new EditImpact(earliest, distinctStages, scope, steps);
     }
+
+    private static IEnumerable<EntityReference> ExpandScope(TransactionDiff diff, DependencyGraph graph)
+    {
+        var pending = new Queue<EntityReference>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in diff.DirectChanges
+            .Concat(diff.AffectedComponents)
+            .Concat(diff.AffectedNets)
+            .Concat(diff.AffectedRegions)
+            .Concat(diff.AffectedConstraints)
+            .Concat(diff.AffectedRoutingResources))
+        {
+            Enqueue(reference);
+        }
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Dequeue();
+            yield return current;
+            foreach (var related in Related(current, graph))
+            {
+                Enqueue(related);
+            }
+        }
+
+        void Enqueue(EntityReference reference)
+        {
+            if (seen.Add(Key(reference)))
+            {
+                pending.Enqueue(reference);
+            }
+        }
+    }
+
+    private static IEnumerable<EntityReference> Related(EntityReference reference, DependencyGraph graph)
+    {
+        var key = Key(reference);
+        if (reference.EntityType == "COMPONENT")
+        {
+            foreach (var item in Lookup(graph.ComponentNets, reference.EntityId).Concat(Lookup(graph.ComponentFootprints, reference.EntityId)))
+            {
+                yield return item;
+            }
+        }
+
+        if (reference.EntityType == "NET")
+        {
+            foreach (var item in Lookup(graph.NetComponents, reference.EntityId).Concat(Lookup(graph.NetRoutes, reference.EntityId)))
+            {
+                yield return item;
+            }
+        }
+
+        if (reference.EntityType == "GROUP")
+        {
+            foreach (var item in Lookup(graph.GroupMembers, reference.EntityId))
+            {
+                yield return item;
+            }
+        }
+
+        if (reference.EntityType == "REGION")
+        {
+            foreach (var item in Lookup(graph.RegionConstraints, reference.EntityId).Concat(Lookup(graph.RegionEntities, reference.EntityId)))
+            {
+                yield return item;
+            }
+        }
+
+        foreach (var item in Lookup(graph.EntityGroups, key)
+            .Concat(Lookup(graph.EntityConstraints, key))
+            .Concat(Lookup(graph.SpatialNeighborhood, key)))
+        {
+            yield return item;
+        }
+    }
+
+    private static IReadOnlyList<EntityReference> Lookup(IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> map, string key) =>
+        map.TryGetValue(key, out var values) ? values : [];
+
+    private static string Key(EntityReference reference) => reference.EntityType.ToUpperInvariant() + "\u001f" + reference.EntityId;
 }
 
 public interface IRecoveryPlanner
@@ -891,6 +1089,9 @@ public sealed class FileRecoveryJournal(string directory) : IRecoveryJournal
             "DeleteGroup" => new DeleteGroupAction(new GroupId(action.Id)),
             "UpsertRegion" => new UpsertRegionAction(JsonSerializer.Deserialize<Region>(RequiredPayload(action), JsonOptions) ?? throw new InvalidDataException("Invalid UpsertRegion journal payload.")),
             "DeleteRegion" => new DeleteRegionAction(new RegionId(action.Id)),
+            "RestoreProjectSnapshot" => new RestoreProjectSnapshotAction(
+                JsonSerializer.Deserialize<CanonicalProject>(RequiredPayload(action), JsonOptions) ?? throw new InvalidDataException("Invalid RestoreProjectSnapshot journal payload."),
+                string.Equals(action.Text, "PHYSICAL", StringComparison.Ordinal)),
             _ => throw new NotSupportedException($"Journal action '{action.Kind}' is not supported for replay.")
         };
 

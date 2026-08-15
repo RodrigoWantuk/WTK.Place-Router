@@ -11,6 +11,8 @@ public sealed class ProjectService(
 {
     private readonly IReadOnlyList<IDesignImporter> _importers = (importers ?? []).ToArray();
 
+    public ICanonicalProjectValidator Validator => validator;
+
     public ProjectDocument CreateProject(string name) =>
         ProjectDocument.New(CanonicalProjectFactory.CreateIncomplete(name));
 

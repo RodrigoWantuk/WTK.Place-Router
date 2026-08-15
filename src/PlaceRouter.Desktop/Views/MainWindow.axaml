@@ -26,7 +26,7 @@
         <TextBlock Text="WTK Place&amp;Router" VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold" />
         <TextBlock Grid.Column="1" Text="{Binding Title}" VerticalAlignment="Center" Opacity="0.68" />
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <Button Content="New" Command="{Binding NewProjectCommand}" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.new-project" />
+          <Button Content="New" Click="NewProject_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.new-project" />
           <Button Content="Open" Click="OpenProject_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.open-project" />
           <Button Content="Import DSN" Click="ImportDsn_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.import-dsn" />
           <Button Content="Save" Click="SaveProject_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.save-project" />
