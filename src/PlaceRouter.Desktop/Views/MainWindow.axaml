@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:dock="using:Dock.Avalonia.Controls"
         xmlns:views="using:PlaceRouter.Presentation.Views"
+        xmlns:a11y="using:Avalonia.Automation"
         x:Class="PlaceRouter.Desktop.Views.MainWindow"
         x:CompileBindings="False"
         Width="1440"
@@ -9,30 +10,45 @@
         MinWidth="1120"
         MinHeight="680"
         Background="#171B20"
-        Title="{Binding Title}">
+        Title="{Binding Title}"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaTitleBarHeightHint="42"
+        WindowDecorations="None">
   <Grid RowDefinitions="42,38,*,26">
-    <Border Background="#20262C" BorderBrush="#39424C" BorderThickness="0,0,0,1" Padding="12,0">
-      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+    <Border x:Name="TitleBar"
+            Background="#20262C"
+            BorderBrush="#39424C"
+            BorderThickness="0,0,0,1"
+            Padding="12,0"
+            PointerPressed="TitleBar_PointerPressed"
+            a11y:AutomationProperties.AutomationId="shell.titlebar">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="14">
         <TextBlock Text="WTK Place&amp;Router" VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold" />
         <TextBlock Grid.Column="1" Text="{Binding Title}" VerticalAlignment="Center" Opacity="0.68" />
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <Button Content="New" Command="{Binding NewProjectCommand}" Padding="10,4" />
-          <Button Content="Open" Click="OpenProject_Click" Padding="10,4" />
-          <Button Content="Import DSN" Click="ImportDsn_Click" Padding="10,4" />
-          <Button Content="Save" Click="SaveProject_Click" Padding="10,4" />
-          <Button Content="Save As" Click="SaveProjectAs_Click" Padding="10,4" />
+          <Button Content="New" Command="{Binding NewProjectCommand}" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.new-project" />
+          <Button Content="Open" Click="OpenProject_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.open-project" />
+          <Button Content="Import DSN" Click="ImportDsn_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.import-dsn" />
+          <Button Content="Save" Click="SaveProject_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.save-project" />
+          <Button Content="Save As" Click="SaveProjectAs_Click" Padding="10,4" a11y:AutomationProperties.AutomationId="toolbar.save-project-as" />
+        </StackPanel>
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+          <Button Content="_" Click="Minimize_Click" Width="34" Padding="0" a11y:AutomationProperties.AutomationId="window.minimize" />
+          <Button Content="□" Click="MaximizeRestore_Click" Width="34" Padding="0" a11y:AutomationProperties.AutomationId="window.maximize-restore" />
+          <Button Content="X" Click="Close_Click" Width="34" Padding="0" a11y:AutomationProperties.AutomationId="window.close" />
         </StackPanel>
       </Grid>
     </Border>
 
-    <Border Grid.Row="1" Background="#242A30" BorderBrush="#39424C" BorderThickness="0,0,0,1" Padding="10,0">
+    <Border Grid.Row="1" Background="#242A30" BorderBrush="#39424C" BorderThickness="0,0,0,1" Padding="10,0" a11y:AutomationProperties.AutomationId="shell.toolbar">
       <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-        <Button Content="Reset Layout" Command="{Binding ResetLayoutCommand}" Padding="10,3" />
-        <Button Content="Close Project" Command="{Binding CloseProjectCommand}" Padding="10,3" />
+        <Button Content="Reset Layout" Command="{Binding ResetLayoutCommand}" Padding="10,3" a11y:AutomationProperties.AutomationId="toolbar.reset-layout" />
+        <Button Content="Close Project" Click="CloseProject_Click" Padding="10,3" a11y:AutomationProperties.AutomationId="toolbar.close-project" />
       </StackPanel>
     </Border>
 
     <dock:DockControl Grid.Row="2"
+                      a11y:AutomationProperties.AutomationId="shell.dock"
                       Layout="{Binding DockLayout}"
                       Factory="{Binding DockFactory}"
                       DefaultContext="{Binding}"

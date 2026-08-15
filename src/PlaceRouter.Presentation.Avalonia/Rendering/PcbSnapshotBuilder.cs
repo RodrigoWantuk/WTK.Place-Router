@@ -43,7 +43,7 @@ public sealed class PcbSnapshotBuilder
 
         var bounds = GeometryEnvelope.FromPoints(shapes.SelectMany(static s => s.Geometry.Outer));
         var selectedItems = selected ?? [];
-        return new PcbBoardSnapshot(bounds, shapes, Ratsnest(project), selectedItems, findings);
+        return new PcbBoardSnapshot(bounds, shapes, Ratsnest(project, geometry), selectedItems, findings);
     }
 
     private static IEnumerable<PcbShapeSnapshot> ComponentShapes(ComponentGeometry component)
@@ -63,18 +63,16 @@ public sealed class PcbSnapshotBuilder
         new(
             kind,
             obj.EntityType,
-            obj.EntityId,
+            kind == PcbShapeKind.Pad ? obj.Id : obj.EntityId,
             obj.Geometry,
             obj.LayerId?.Value,
             obj.NetId?.Value,
             label,
             status);
 
-    private static IReadOnlyList<PcbRatsnestEdge> Ratsnest(CanonicalProject project)
+    private static IReadOnlyList<PcbRatsnestEdge> Ratsnest(CanonicalProject project, PhysicalGeometryModel geometry)
     {
-        var poses = project.PhysicalDesignState.ComponentPoses.ToDictionary(static p => p.ComponentId.Value, StringComparer.Ordinal);
-        var footprints = project.LogicalDesign.Footprints.ToDictionary(static f => f.Id.Value, StringComparer.Ordinal);
-        var components = project.LogicalDesign.Components.ToDictionary(static c => c.Id.Value, StringComparer.Ordinal);
+        var componentGeometry = geometry.Components.ToDictionary(static c => c.Component.Id.Value, StringComparer.Ordinal);
         var result = new List<PcbRatsnestEdge>();
 
         foreach (var net in project.LogicalDesign.Nets)
@@ -82,20 +80,22 @@ public sealed class PcbSnapshotBuilder
             var points = new List<GeometryPoint>();
             foreach (var endpoint in net.Endpoints)
             {
-                if (!components.TryGetValue(endpoint.ComponentId.Value, out var component) ||
-                    component.FootprintId is null ||
-                    !footprints.TryGetValue(component.FootprintId.Value.Value, out var footprint) ||
-                    !poses.TryGetValue(endpoint.ComponentId.Value, out var pose))
+                if (!componentGeometry.TryGetValue(endpoint.ComponentId.Value, out var component))
                 {
                     continue;
                 }
 
-                var pad = endpoint.PadId is null
+                var padGeometry = endpoint.PadId is null
                     ? null
-                    : footprint.Pads.FirstOrDefault(p => p.Id == endpoint.PadId.Value);
-                var x = pose.Position.X.Value + (pad?.Position.X.Value ?? 0);
-                var y = pose.Position.Y.Value + (pad?.Position.Y.Value ?? 0);
-                points.Add(new GeometryPoint(x, y));
+                    : component.Pads.FirstOrDefault(p => p.Pad.Id == endpoint.PadId.Value);
+                var objectGeometry = padGeometry?.Objects.FirstOrDefault()?.Geometry ?? component.PlacementBoundary;
+                if (objectGeometry is null)
+                {
+                    continue;
+                }
+
+                var envelope = objectGeometry.Envelope;
+                points.Add(new GeometryPoint((envelope.MinX + envelope.MaxX) / 2, (envelope.MinY + envelope.MaxY) / 2));
             }
 
             for (var i = 1; i < points.Count; i++)

@@ -47,37 +47,8 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             var embeddedPath = request.SourceRetentionPolicy == SourceRetentionPolicy.Embed
                 ? "source/" + Path.GetFileName(request.SourcePath)
                 : null;
-            var capabilities = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["boardOutline"] = "COMPLETE",
-                ["layers"] = "COMPLETE",
-                ["components"] = "COMPLETE",
-                ["componentPlacement"] = "COMPLETE",
-                ["pads"] = "COMPLETE",
-                ["nets"] = "COMPLETE",
-                ["rules"] = "PARTIAL",
-                ["stackupMaterials"] = "MISSING",
-                ["existingRoutes"] = "NOT_AVAILABLE"
-            };
-            var losses = new List<Diagnostic>
-            {
-                new(
-                    DiagnosticCodes.ImportLoss,
-                    DiagnosticSeverity.Warning,
-                    "Import",
-                    "DSN source did not provide stackup material/thickness data; values remain Unknown.",
-                    Evidence: new Dictionary<string, object?> { ["capability"] = "stackupMaterials" },
-                    Source: AdapterId,
-                    Blocking: false),
-                new(
-                    DiagnosticCodes.ImportLoss,
-                    DiagnosticSeverity.Info,
-                    "Import",
-                    "Initial PLAN-03 DSN import preserves logical/placement handoff and does not import existing route geometry.",
-                    Evidence: new Dictionary<string, object?> { ["capability"] = "existingRoutes" },
-                    Source: AdapterId,
-                    Blocking: false)
-            };
+            var capabilities = new Dictionary<string, string>(StringComparer.Ordinal);
+            var losses = new List<Diagnostic>();
 
             var project = ToProject(root, request.SourcePath, sourceHash, sourceImportId, embeddedPath, importedAt, capabilities, losses);
             var fileContext = new ProjectFileContext(
@@ -116,8 +87,8 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         SourceImportId sourceImportId,
         string? embeddedPath,
         DateTimeOffset importedAt,
-        IReadOnlyDictionary<string, string> capabilities,
-        IReadOnlyList<Diagnostic> losses)
+        IDictionary<string, string> capabilities,
+        List<Diagnostic> losses)
     {
         var name = root.AtomAt(1) ?? Path.GetFileNameWithoutExtension(sourcePath);
         var projectId = new ProjectId("prj_" + StableToken(name + "_" + sourceHash[..12]));
@@ -132,15 +103,19 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         foreach (var componentNode in root.Descendants("component"))
         {
             var reference = componentNode.AtomAt(1) ?? throw new InvalidDataException("Component without reference designator.");
-            var footprintName = componentNode.Child("footprint")?.AtomAt(1) ?? "unknown";
-            var footprintId = new FootprintId("fp_" + StableToken(footprintName));
+            var footprintName = componentNode.Child("footprint")?.AtomAt(1);
+            FootprintId? footprintId = string.IsNullOrWhiteSpace(footprintName)
+                ? null
+                : new FootprintId("fp_" + StableToken(footprintName));
             var componentId = new ComponentId("cmp_" + StableToken(reference));
-            var pads = ReadPads(componentNode, footprintId, layerByName).ToArray();
-            if (!footprints.ContainsKey(footprintId.Value))
+            var pads = footprintId is null
+                ? []
+                : ReadPads(componentNode, footprintId.Value, layerByName, losses).ToArray();
+            if (footprintId is not null && !footprints.ContainsKey(footprintId.Value.Value))
             {
-                footprints[footprintId.Value] = new Footprint(
-                    footprintId,
-                    footprintName,
+                footprints[footprintId.Value.Value] = new Footprint(
+                    footprintId.Value,
+                    footprintName!,
                     ZeroPoint(),
                     null,
                     BodyFromPads(pads),
@@ -149,6 +124,10 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                     [],
                     [],
                     ImportedProvenance(sourceImportId));
+            }
+            else if (footprintId is null)
+            {
+                AddLoss(losses, "footprints", $"Component '{reference}' did not provide a footprint; footprintId remains Unknown.", DiagnosticSeverity.Warning);
             }
 
             componentPadIds[reference] = pads.ToDictionary(p => p.Number, p => p.Id, StringComparer.OrdinalIgnoreCase);
@@ -166,15 +145,40 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 ImportedProvenance(sourceImportId)));
 
             var place = componentNode.Child("place");
-            var x = Unit(place?.AtomAt(1) ?? "0");
-            var y = Unit(place?.AtomAt(2) ?? "0");
-            var side = (place?.AtomAt(3) ?? "front").Equals("back", StringComparison.OrdinalIgnoreCase) ? "BOTTOM" : "TOP";
-            var rotation = decimal.Parse(place?.AtomAt(4) ?? "0", System.Globalization.CultureInfo.InvariantCulture);
+            if (place is null)
+            {
+                AddLoss(losses, "componentPlacement", $"Component '{reference}' did not provide placement; no ComponentPose was created.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            if (!TryRequiredUnit(place, 1, $"Component '{reference}' placement X is missing; no ComponentPose was created.", losses, "componentPlacement", out var x) ||
+                !TryRequiredUnit(place, 2, $"Component '{reference}' placement Y is missing; no ComponentPose was created.", losses, "componentPlacement", out var y))
+            {
+                continue;
+            }
+
+            var sideAtom = place.AtomAt(3);
+            if (sideAtom is null)
+            {
+                AddLoss(losses, "componentPlacement", $"Component '{reference}' placement side is missing; no ComponentPose was created.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var rotationAtom = place.AtomAt(4);
+            if (rotationAtom is null)
+            {
+                AddLoss(losses, "componentPlacement", $"Component '{reference}' placement rotation is missing; no ComponentPose was created.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var side = sideAtom.Equals("back", StringComparison.OrdinalIgnoreCase) ? "BOTTOM" : "TOP";
+            var rotation = decimal.Parse(rotationAtom, System.Globalization.CultureInfo.InvariantCulture);
             poses.Add(new ComponentPose(componentId, new Point2(x, y), new AngleDegrees(rotation), side, "PLACED", AdapterId));
         }
 
         var nets = ReadNets(root, componentPadIds).ToArray();
         var rules = ReadRules(root);
+        SetCapabilities(capabilities, outline, layers, components, footprints.Values.ToArray(), poses, nets, rules, losses);
         var manufacturing = new ManufacturingProfile(
             new StableId("mfg_imported_" + sourceHash[..8]),
             "Imported DSN manufacturing rules",
@@ -192,7 +196,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             sourceHash,
             importedAt,
             embeddedPath,
-            capabilities,
+            capabilities.ToDictionary(k => k.Key, v => v.Value, StringComparer.Ordinal),
             losses);
 
         return new CanonicalProject(
@@ -234,18 +238,14 @@ public sealed class SpecctraDsnImporter : IDesignImporter
 
     private static IReadOnlyList<BoardLayer> ReadLayers(SExpression root)
     {
-        var layers = root.Descendants("layer")
+        return root.Descendants("layer")
             .Select((node, index) =>
             {
-                var name = node.AtomAt(1) ?? "Layer" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var name = node.AtomAt(1) ?? throw new InvalidDataException("Layer without name.");
                 var type = (node.AtomAt(2) ?? "signal").Equals("plane", StringComparison.OrdinalIgnoreCase) ? "COPPER_PLANE" : "COPPER_SIGNAL";
                 return new BoardLayer(LayerIdFor(name), name, type, index + 1, null, SourcedValue.Unknown(), new Dictionary<string, SourcedValue>(StringComparer.Ordinal));
             })
             .ToArray();
-
-        return layers.Length == 0
-            ? [new BoardLayer(new LayerId("layer_top_cu"), "Top", "COPPER_SIGNAL", 1, null, SourcedValue.Unknown(), new Dictionary<string, SourcedValue>(StringComparer.Ordinal))]
-            : layers;
     }
 
     private static Polygon2? ReadOutline(SExpression root)
@@ -272,24 +272,79 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         return new Polygon2(points, []);
     }
 
-    private static IEnumerable<Pad> ReadPads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName)
+    private static IEnumerable<Pad> ReadPads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName, List<Diagnostic> losses)
     {
         foreach (var pad in componentNode.Children.Where(c => c.IsList("pad")))
         {
             var number = pad.AtomAt(1) ?? throw new InvalidDataException("Pad without pin number.");
-            var padType = (pad.AtomAt(2) ?? "smd").Equals("thru", StringComparison.OrdinalIgnoreCase) ? "THROUGH_HOLE" : "SMD";
-            var shape = (pad.AtomAt(3) ?? "rect").ToUpperInvariant() switch
+            var padTypeAtom = pad.AtomAt(2);
+            if (padTypeAtom is null)
             {
-                "CIRCLE" or "ROUND" => "CIRCLE",
-                "OVAL" => "OVAL",
-                _ => "RECT"
-            };
-            var x = Unit(pad.AtomAt(4) ?? "0");
-            var y = Unit(pad.AtomAt(5) ?? "0");
-            var sizeX = Unit(pad.AtomAt(6) ?? "0");
-            var sizeY = Unit(pad.AtomAt(7) ?? pad.AtomAt(6) ?? "0");
-            var layerName = pad.AtomAt(8) ?? "Top";
-            var layerId = layerByName.TryGetValue(layerName, out var existingLayer) ? existingLayer : LayerIdFor(layerName);
+                AddLoss(losses, "pads", $"Pad '{number}' did not provide a type; pad was not imported.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var shapeAtom = pad.AtomAt(3);
+            if (shapeAtom is null)
+            {
+                AddLoss(losses, "pads", $"Pad '{number}' did not provide a shape; pad was not imported.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var padType = padTypeAtom.Equals("thru", StringComparison.OrdinalIgnoreCase) ? "THROUGH_HOLE" : "SMD";
+            string shape;
+            switch (shapeAtom.ToUpperInvariant())
+            {
+                case "CIRCLE":
+                case "ROUND":
+                    shape = "CIRCLE";
+                    break;
+                case "OVAL":
+                    shape = "OVAL";
+                    break;
+                case "RECT":
+                    shape = "RECT";
+                    break;
+                default:
+                    AddLoss(losses, "pads", $"Pad '{number}' uses unsupported shape '{shapeAtom}'; pad was not imported.", DiagnosticSeverity.Warning);
+                    continue;
+            }
+
+            if (!TryRequiredUnit(pad, 4, $"Pad '{number}' position X is missing; pad was not imported.", losses, "pads", out var x) ||
+                !TryRequiredUnit(pad, 5, $"Pad '{number}' position Y is missing; pad was not imported.", losses, "pads", out var y))
+            {
+                continue;
+            }
+
+            var sizeX = OptionalUnit(pad.AtomAt(6));
+            if (sizeX is null)
+            {
+                AddLoss(losses, "pads", $"Pad '{number}' size X is missing; pad was not imported.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var sizeY = OptionalUnit(pad.AtomAt(7));
+            if (sizeY is null && shape is not "CIRCLE")
+            {
+                AddLoss(losses, "pads", $"Pad '{number}' size Y is missing; pad was not imported.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            sizeY ??= sizeX;
+            var layerName = pad.AtomAt(8);
+            var layerIds = Array.Empty<LayerId>();
+            if (layerName is null)
+            {
+                AddLoss(losses, "pads", $"Pad '{number}' did not provide a layer; pad layerIds remain empty.", DiagnosticSeverity.Warning);
+            }
+            else if (layerByName.TryGetValue(layerName, out var existingLayer))
+            {
+                layerIds = [existingLayer];
+            }
+            else
+            {
+                AddLoss(losses, "layers", $"Pad '{number}' references undeclared layer '{layerName}'; pad layerIds remain empty.", DiagnosticSeverity.Warning);
+            }
 
             yield return new Pad(
                 new PadId("pad_" + StableToken(footprintId.Value + "_" + number)),
@@ -303,7 +358,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 sizeY,
                 null,
                 padType,
-                [layerId],
+                layerIds,
                 null,
                 null,
                 null);
@@ -410,6 +465,33 @@ public sealed class SpecctraDsnImporter : IDesignImporter
     private static LengthUnits Unit(string value) =>
         new(long.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
 
+    private static LengthUnits RequiredUnit(SExpression node, int atomIndex, string message) =>
+        node.AtomAt(atomIndex) is { } value
+            ? Unit(value)
+            : throw new InvalidDataException(message);
+
+    private static bool TryRequiredUnit(
+        SExpression node,
+        int atomIndex,
+        string message,
+        List<Diagnostic> losses,
+        string capability,
+        out LengthUnits value)
+    {
+        if (node.AtomAt(atomIndex) is { } raw)
+        {
+            value = Unit(raw);
+            return true;
+        }
+
+        value = LengthUnits.FromMicrometers(0);
+        AddLoss(losses, capability, message, DiagnosticSeverity.Warning);
+        return false;
+    }
+
+    private static LengthUnits? OptionalUnit(string? value) =>
+        value is null ? null : Unit(value);
+
     private static Point2 ZeroPoint() => new(LengthUnits.FromMicrometers(0), LengthUnits.FromMicrometers(0));
 
     private static SourcedValue KnownNumber(long value) =>
@@ -422,6 +504,52 @@ public sealed class SpecctraDsnImporter : IDesignImporter
     {
         var dictionary = values.ToDictionary(v => v.Key, v => v.Value, StringComparer.Ordinal);
         return JsonSerializer.SerializeToElement(dictionary);
+    }
+
+    private static void SetCapabilities(
+        IDictionary<string, string> capabilities,
+        Polygon2? outline,
+        IReadOnlyList<BoardLayer> layers,
+        IReadOnlyList<Component> components,
+        IReadOnlyList<Footprint> footprints,
+        IReadOnlyList<ComponentPose> poses,
+        IReadOnlyList<Net> nets,
+        IReadOnlyDictionary<string, SourcedValue> rules,
+        List<Diagnostic> losses)
+    {
+        capabilities["boardOutline"] = outline is null ? "MISSING" : "COMPLETE";
+        capabilities["layers"] = layers.Count == 0 ? "MISSING" : "COMPLETE";
+        capabilities["components"] = components.Count == 0 ? "MISSING" : "COMPLETE";
+        capabilities["footprints"] = components.Count == 0 ? "NOT_APPLICABLE" : footprints.Count == components.Count ? "COMPLETE" : footprints.Count == 0 ? "MISSING" : "PARTIAL";
+        capabilities["componentPlacement"] = components.Count == 0 ? "NOT_APPLICABLE" : poses.Count == components.Count ? "COMPLETE" : poses.Count == 0 ? "MISSING" : "PARTIAL";
+        capabilities["pads"] = footprints.Count == 0 ? "MISSING" : footprints.All(f => f.Pads.Count > 0) ? "COMPLETE" : "PARTIAL";
+        capabilities["nets"] = nets.Count == 0 ? "MISSING" : "COMPLETE";
+        capabilities["rules"] = rules.Count == 0 ? "MISSING" : "PARTIAL";
+        capabilities["stackupMaterials"] = "MISSING";
+        capabilities["existingRoutes"] = "NOT_AVAILABLE";
+
+        if (outline is null) AddLoss(losses, "boardOutline", "DSN source did not provide a board outline.", DiagnosticSeverity.Warning);
+        if (layers.Count == 0) AddLoss(losses, "layers", "DSN source did not provide layer definitions; no layers were invented.", DiagnosticSeverity.Warning);
+        if (rules.Count == 0) AddLoss(losses, "rules", "DSN source did not provide manufacturing routing rules.", DiagnosticSeverity.Warning);
+        AddLoss(losses, "stackupMaterials", "DSN source did not provide stackup material/thickness data; values remain Unknown.", DiagnosticSeverity.Warning);
+        AddLoss(losses, "existingRoutes", "Initial DSN import preserves logical/placement handoff and does not import existing route geometry.", DiagnosticSeverity.Info);
+    }
+
+    private static void AddLoss(List<Diagnostic> losses, string capability, string message, DiagnosticSeverity severity)
+    {
+        if (losses.Any(d => Equals(d.Evidence?.GetValueOrDefault("capability"), capability) && d.Message == message))
+        {
+            return;
+        }
+
+        losses.Add(new Diagnostic(
+            DiagnosticCodes.ImportLoss,
+            severity,
+            "Import",
+            message,
+            Evidence: new Dictionary<string, object?> { ["capability"] = capability },
+            Source: "placerouter.specctra-dsn",
+            Blocking: false));
     }
 
     private sealed class SExpression

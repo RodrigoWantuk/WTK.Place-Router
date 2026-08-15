@@ -62,7 +62,6 @@ public sealed partial class PlaceRouterShellViewModel : ViewModelBase
     [RelayCommand]
     public void NewProject() => Projects.NewProject($"New Board {DateTimeOffset.Now:yyyyMMdd-HHmm}");
 
-    [RelayCommand]
     public void CloseProject() => Projects.CloseProject();
 
     [RelayCommand]
@@ -83,15 +82,34 @@ public sealed partial class PlaceRouterShellViewModel : ViewModelBase
 
     public bool SaveProjectAs(string path) => Projects.SaveProjectAs(path).Success;
 
+    public Task<ImportResult> ImportDsnAsync(string path) => Projects.ImportDesignAsync(path, SourceRetentionPolicy.ReferenceOnly);
+
+    public Task<ProjectLoadResult> OpenProjectAsync(string path) => Projects.OpenProjectAsync(path);
+
+    public async Task<bool> SaveProjectAsync() => (await Projects.SaveProjectAsync().ConfigureAwait(true)).Success;
+
+    public async Task<bool> SaveProjectAsAsync(string path) => (await Projects.SaveProjectAsAsync(path).ConfigureAwait(true)).Success;
+
+    public bool HasDirtyProject => Projects.IsDirty;
+
     public void PersistWorkspace(IReadOnlyList<PlaceRouterMonitorWorkArea> monitors)
     {
         _layoutDocument.RecentProjects = Projects.RecentProjects.ToList();
         if (DockLayout is not null)
         {
+            PlaceRouterDockLayoutState.CaptureProportions(DockLayout, _layoutDocument.Layout);
             _layoutDocument.Layout.FloatingDocks = PlaceRouterDockLayoutState.Capture(DockLayout, monitors).ToList();
         }
 
         _layoutService.Save(_layoutDocument);
+    }
+
+    public void RestoreFloatingDocks(IReadOnlyList<PlaceRouterMonitorWorkArea> monitors)
+    {
+        if (DockLayout is not null)
+        {
+            PlaceRouterDockLayoutState.Restore(DockLayout, DockFactory, _layoutDocument.Layout.FloatingDocks, monitors);
+        }
     }
 
     private void RefreshTitle()

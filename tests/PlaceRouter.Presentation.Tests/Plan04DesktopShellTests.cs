@@ -121,6 +121,39 @@ public sealed class Plan04DesktopShellTests
         Assert.Equal("cmp_u1:pad_1", hit.EntityId);
     }
 
+    [Fact]
+    public void Snapshot_builder_uses_unique_physical_pad_instance_ids()
+    {
+        using var temp = new TempDirectory();
+        var result = Service().ImportDesign(new ImportRequest(WriteDsn(temp.Path), SourceRetentionPolicy.ReferenceOnly));
+        Assert.True(result.Success, Messages(result.Diagnostics));
+
+        var snapshot = new PcbSnapshotBuilder().Build(result.Project, null, []);
+        var pads = snapshot.Shapes.Where(s => s.Kind == PcbShapeKind.Pad).ToArray();
+
+        Assert.Equal(4, pads.Length);
+        Assert.Equal(4, pads.Select(p => p.EntityId).Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains(pads, p => p.EntityId.StartsWith("cmp_u1:pad:", StringComparison.Ordinal));
+        Assert.Contains(pads, p => p.EntityId.StartsWith("cmp_u2:pad:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ProjectCoordinator_uses_session_dirty_state_and_save_clears_it()
+    {
+        using var temp = new TempDirectory();
+        var coordinator = new ProjectCoordinator(Service());
+
+        coordinator.ImportDesign(WriteDsn(temp.Path), SourceRetentionPolicy.ReferenceOnly);
+        Assert.True(coordinator.IsDirty);
+        Assert.True(coordinator.Session!.IsDirty);
+
+        var saved = coordinator.SaveProjectAs(Path.Combine(temp.Path, "saved.prdx"));
+
+        Assert.True(saved.Success, Messages(saved.Diagnostics));
+        Assert.False(coordinator.IsDirty);
+        Assert.False(coordinator.Session!.IsDirty);
+    }
+
     private static ProjectService Service()
     {
         var validator = new CanonicalIntegrityValidator();

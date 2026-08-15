@@ -43,6 +43,25 @@ public sealed class Plan03ImportLifecycleTests
     }
 
     [Fact]
+    public void Dsn_import_reports_missing_physical_data_without_inventing_defaults()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "partial.dsn");
+        File.WriteAllText(path, PartialDsn, Encoding.UTF8);
+
+        var result = Service().ImportDesign(new ImportRequest(path, SourceRetentionPolicy.ReferenceOnly));
+
+        Assert.True(result.Success, Messages(result.Diagnostics));
+        Assert.Equal("MISSING", result.Capabilities["layers"]);
+        Assert.Equal("MISSING", result.Capabilities["footprints"]);
+        Assert.Equal("MISSING", result.Capabilities["componentPlacement"]);
+        Assert.Empty(result.Project!.Board.Layers);
+        Assert.Null(result.Project.LogicalDesign.Components.Single().FootprintId);
+        Assert.Empty(result.Project.PhysicalDesignState.ComponentPoses);
+        Assert.Contains(result.Diagnostics, d => d.Code == DiagnosticCodes.ImportLoss && d.Message.Contains("no layers were invented", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Import_save_reopen_preserves_project_and_embedded_source()
     {
         using var temp = new TempDirectory();
@@ -145,6 +164,86 @@ public sealed class Plan03ImportLifecycleTests
     }
 
     [Fact]
+    public void Undo_and_redo_use_session_transactions()
+    {
+        var session = new ProjectSession(ImportedDocument());
+        var basePosition = Pose(session.Document.Project, "cmp_u1").Position;
+        var transaction = session.BeginTransaction("move U1", "test");
+        transaction.Apply(new MoveComponentAction(new ComponentId("cmp_u1"), new Point2(new(2600), new(2700)), "test"));
+        session.Apply(transaction);
+
+        session.Undo();
+        Assert.Equal(basePosition, Pose(session.Document.Project, "cmp_u1").Position);
+        Assert.True(session.CanRedo);
+
+        session.Redo();
+        Assert.Equal(new Point2(new(2600), new(2700)), Pose(session.Document.Project, "cmp_u1").Position);
+        Assert.True(session.CanUndo);
+    }
+
+    [Fact]
+    public void Recovery_journal_replays_metadata_manufacturing_constraint_group_and_region_actions()
+    {
+        using var temp = new TempDirectory();
+        var baseDocument = ImportedDocument();
+        var journal = new FileRecoveryJournal(temp.Path);
+        var session = new ProjectSession(baseDocument, journal);
+        var constraint = new ConstraintDefinition(
+            new ConstraintId("c_test"),
+            "AllowedSide",
+            new ConstraintSelector("ENTITY", "COMPONENT", ["cmp_u1"], null),
+            null,
+            JsonSerializer.SerializeToElement(new { allowedSides = new[] { "TOP" } }),
+            "REQUIRED",
+            new ConstraintScope([], null, null, []),
+            Provenance.UserDefined,
+            "test",
+            true);
+        var group = new Group(new GroupId("grp_power"), "Power", "FUNCTIONAL", null, [new GroupMember("COMPONENT", "cmp_u1")], new Dictionary<string, SourcedValue>(StringComparer.Ordinal));
+        var region = new Region(new RegionId("reg_power"), "Power", new Polygon2([
+            new Point2(new(0), new(0)),
+            new Point2(new(1000), new(0)),
+            new Point2(new(1000), new(1000)),
+            new Point2(new(0), new(1000))
+        ], []), [], "POWER", new Dictionary<string, SourcedValue>(StringComparer.Ordinal));
+
+        var metadata = session.BeginTransaction("metadata", "test");
+        metadata.Apply(new UpdateProjectMetadataAction("Recovered", "journal"));
+        session.Apply(metadata);
+        var manufacturing = session.BeginTransaction("manufacturing", "test");
+        manufacturing.Apply(new UpdateManufacturingCapabilityAction("minimumClearance", KnownUm(250)));
+        session.Apply(manufacturing);
+        var authoring = session.BeginTransaction("authoring", "test");
+        authoring.Apply(new UpsertConstraintAction(constraint));
+        authoring.Apply(new UpsertGroupAction(group));
+        authoring.Apply(new UpsertRegionAction(region));
+        session.Apply(authoring);
+
+        var recovered = journal.Replay(baseDocument);
+
+        Assert.Equal("Recovered", recovered.Project.Metadata.Name);
+        Assert.Equal("KNOWN", recovered.Project.ManufacturingProfile.Capabilities["minimumClearance"].Status);
+        Assert.Contains(recovered.Project.Constraints, c => c.Id.Value == "c_test");
+        Assert.Contains(recovered.Project.LogicalDesign.Groups, g => g.Id.Value == "grp_power");
+        Assert.Contains(recovered.Project.Board.Regions, r => r.Id.Value == "reg_power");
+    }
+
+    [Fact]
+    public void Recovery_journal_rejects_unexpected_base_revision()
+    {
+        using var temp = new TempDirectory();
+        var baseDocument = ImportedDocument();
+        var journal = new FileRecoveryJournal(temp.Path);
+        var session = new ProjectSession(baseDocument, journal);
+        var transaction = session.BeginTransaction("move", "test");
+        transaction.Apply(new MoveComponentAction(new ComponentId("cmp_u1"), new Point2(new(2200), new(2200)), "test"));
+        session.Apply(transaction);
+        var wrongBase = baseDocument with { Project = baseDocument.Project with { ProjectRevision = 7 } };
+
+        Assert.Throws<InvalidDataException>(() => journal.Replay(wrongBase));
+    }
+
+    [Fact]
     public void Run_baseline_becomes_stale_after_edit()
     {
         var session = new ProjectSession(ImportedDocument());
@@ -237,6 +336,18 @@ public sealed class Plan03ImportLifecycleTests
     (net GND (pins U1-2 U2-2))
   )
   (rules (width 150) (clearance 150) (drill 300) (via 600))
+)
+""";
+
+    private const string PartialDsn = """
+(pcb PartialBoard
+  (unit um)
+  (placement
+    (component U1)
+  )
+  (network
+    (net N1 (pins U1-1))
+  )
 )
 """;
 }

@@ -1,4 +1,5 @@
 using Avalonia;
+using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
@@ -26,6 +27,69 @@ public static class PlaceRouterDockLayoutState
             .GroupBy(static state => state.ToolId, StringComparer.Ordinal)
             .Select(static group => group.First())
             .ToArray();
+    }
+
+    public static void Restore(
+        IRootDock root,
+        PlaceRouterDockFactory factory,
+        IEnumerable<PlaceRouterFloatingDockState> states,
+        IReadOnlyList<PlaceRouterMonitorWorkArea> monitors)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(states);
+        var available = NormalizeMonitors(monitors);
+        foreach (var state in states.GroupBy(static item => item.ToolId, StringComparer.Ordinal).Select(static group => group.First()))
+        {
+            var tool = EnumerateDockables(root).OfType<Tool>().FirstOrDefault(item => item.Id == state.ToolId);
+            if (tool is null || IsAlreadyFloating(root, tool))
+            {
+                continue;
+            }
+
+            var normalized = Normalize(state, available);
+            factory.FloatDockable(tool, new DockWindowOptions
+            {
+                OwnerMode = DockWindowOwnerMode.None,
+                ShowInTaskbar = true
+            });
+            var window = (root.Windows ?? []).FirstOrDefault(item => Contains(item.Layout, tool));
+            if (window is null)
+            {
+                continue;
+            }
+
+            window.X = normalized.X;
+            window.Y = normalized.Y;
+            window.Width = normalized.Width;
+            window.Height = normalized.Height;
+            window.ShowInTaskbar = true;
+        }
+    }
+
+    public static void CaptureProportions(IRootDock root, PlaceRouterLayoutState state)
+    {
+        foreach (var dock in EnumerateDockables(root).OfType<IProportionalDock>())
+        {
+            switch (dock.Id)
+            {
+                case "dock.navigator":
+                    state.LeftProportion = dock.Proportion;
+                    break;
+                case "dock.right":
+                    state.RightProportion = dock.Proportion;
+                    break;
+                case "dock.workbench":
+                    state.BottomProportion = dock.Proportion;
+                    break;
+                case "dock.constraints":
+                    state.ComposerProportion = dock.Proportion;
+                    break;
+                case "dock.inspector":
+                    state.InspectorProportion = dock.Proportion;
+                    break;
+            }
+        }
     }
 
     public static PlaceRouterFloatingDockState Normalize(
@@ -73,6 +137,12 @@ public static class PlaceRouterDockLayoutState
             MonitorId = monitor.Id
         }, monitors);
     }
+
+    private static bool IsAlreadyFloating(IRootDock root, Tool tool) =>
+        (root.Windows ?? []).Any(window => Contains(window.Layout, tool));
+
+    private static bool Contains(IDockable? root, IDockable target) =>
+        EnumerateDockables(root).Any(item => ReferenceEquals(item, target));
 
     private static IEnumerable<IDockable> EnumerateDockables(IDockable? dockable)
     {

@@ -40,7 +40,7 @@ public sealed class PcbViewportControl : Control
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == BoundsProperty)
+        if (change.Property == BoundsProperty || change.Property == SnapshotProperty)
         {
             Fit();
         }
@@ -149,10 +149,19 @@ public sealed class PcbViewportControl : Control
     {
         var brush = BrushFor(shape);
         var pen = new Pen(selected ? Brushes.White : StrokeFor(shape), selected ? 2.5 : 1);
-        var geometry = ToGeometry(shape.Geometry.Outer);
+        var geometry = ToGeometry(shape.Geometry);
         if (geometry is not null)
         {
             context.DrawGeometry(brush, pen, geometry);
+        }
+
+        foreach (var hole in shape.Geometry.Holes.Where(static h => h.Count >= 3))
+        {
+            var holeGeometry = ToGeometry(new Geometry.GeometryPolygon(hole, []));
+            if (holeGeometry is not null)
+            {
+                context.DrawGeometry(new SolidColorBrush(Color.FromRgb(20, 24, 28)), pen, holeGeometry);
+            }
         }
 
         if (selected)
@@ -162,8 +171,9 @@ public sealed class PcbViewportControl : Control
         }
     }
 
-    private StreamGeometry? ToGeometry(IReadOnlyList<Geometry.GeometryPoint> points)
+    private StreamGeometry? ToGeometry(Geometry.GeometryPolygon polygon)
     {
+        var points = polygon.Outer;
         if (points.Count < 3)
         {
             return null;
@@ -179,6 +189,17 @@ public sealed class PcbViewportControl : Control
             }
 
             ctx.EndFigure(true);
+
+            foreach (var hole in polygon.Holes.Where(static h => h.Count >= 3))
+            {
+                ctx.BeginFigure(_transform.WorldToScreen(hole[0]), true);
+                foreach (var point in hole.Skip(1))
+                {
+                    ctx.LineTo(_transform.WorldToScreen(point));
+                }
+
+                ctx.EndFigure(true);
+            }
         }
 
         return geometry;

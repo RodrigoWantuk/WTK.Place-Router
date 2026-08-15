@@ -8,4 +8,7 @@ public partial class BoardWorkspaceView : UserControl
     {
         InitializeComponent();
     }
+
+    private void Fit_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) =>
+        Viewport.Fit();
 }

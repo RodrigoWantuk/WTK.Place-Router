@@ -34,8 +34,12 @@ public sealed record TransactionDiff(
     IReadOnlyList<EntityReference> DirectChanges,
     IReadOnlyList<EntityReference> AffectedComponents,
     IReadOnlyList<EntityReference> AffectedNets,
+    IReadOnlyList<EntityReference> AffectedRegions,
     IReadOnlyList<EntityReference> AffectedConstraints,
     IReadOnlyList<EntityReference> AffectedRoutingResources,
+    IReadOnlyList<EntityReference> ResolvedFindings,
+    IReadOnlyList<EntityReference> NewFindings,
+    IReadOnlyDictionary<string, double> MetricDeltas,
     string Reason,
     string Source);
 
@@ -56,8 +60,8 @@ public sealed record RecoveryResult(
 
 public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? journal = null)
 {
-    private readonly Stack<TransactionDiff> _undo = new();
-    private readonly Stack<TransactionDiff> _redo = new();
+    private readonly Stack<CommittedTransaction> _undo = new();
+    private readonly Stack<CommittedTransaction> _redo = new();
 
     public ProjectDocument Document { get; private set; } = document;
 
@@ -67,17 +71,55 @@ public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? j
 
     public long PhysicalStateRevision => Document.Project.PhysicalDesignState.StateRevision;
 
-    public IReadOnlyList<TransactionDiff> UndoHistory => _undo.ToArray();
+    public bool CanUndo => _undo.Count > 0;
 
-    public IReadOnlyList<TransactionDiff> RedoHistory => _redo.ToArray();
+    public bool CanRedo => _redo.Count > 0;
+
+    public IReadOnlyList<TransactionDiff> UndoHistory => _undo.Select(static item => item.Diff).ToArray();
+
+    public IReadOnlyList<TransactionDiff> RedoHistory => _redo.Select(static item => item.Diff).ToArray();
 
     public PhysicalDesignTransaction BeginTransaction(string reason, string source = "user") =>
         new(this, reason, source);
 
+    public void MarkDirty() => IsDirty = true;
+
     public RecoveryResult Apply(PhysicalDesignTransaction transaction, IEditImpactPlanner? impactPlanner = null, IRecoveryPlanner? recoveryPlanner = null)
     {
         var committed = transaction.Commit();
-        Commit(committed.Document, committed.Diff, transaction.Actions);
+        Commit(Document, committed.Document, committed.Diff, transaction.Actions);
+        var planner = impactPlanner ?? new EditImpactPlanner();
+        var impact = planner.Plan(committed.Diff, DependencyGraph.From(Document.Project));
+        return (recoveryPlanner ?? new RecoveryPlanner()).Recover(Document.Project, impact);
+    }
+
+    public RecoveryResult Undo(IEditImpactPlanner? impactPlanner = null, IRecoveryPlanner? recoveryPlanner = null)
+    {
+        if (!CanUndo)
+        {
+            throw new InvalidOperationException("No transaction is available to undo.");
+        }
+
+        var committed = _undo.Pop();
+        _redo.Push(committed);
+        Document = committed.Before;
+        IsDirty = true;
+        var planner = impactPlanner ?? new EditImpactPlanner();
+        var impact = planner.Plan(committed.Diff, DependencyGraph.From(Document.Project));
+        return (recoveryPlanner ?? new RecoveryPlanner()).Recover(Document.Project, impact);
+    }
+
+    public RecoveryResult Redo(IEditImpactPlanner? impactPlanner = null, IRecoveryPlanner? recoveryPlanner = null)
+    {
+        if (!CanRedo)
+        {
+            throw new InvalidOperationException("No transaction is available to redo.");
+        }
+
+        var committed = _redo.Pop();
+        _undo.Push(committed);
+        Document = committed.After;
+        IsDirty = true;
         var planner = impactPlanner ?? new EditImpactPlanner();
         var impact = planner.Plan(committed.Diff, DependencyGraph.From(Document.Project));
         return (recoveryPlanner ?? new RecoveryPlanner()).Recover(Document.Project, impact);
@@ -95,14 +137,20 @@ public sealed class ProjectSession(ProjectDocument document, IRecoveryJournal? j
         return result;
     }
 
-    internal void Commit(ProjectDocument document, TransactionDiff diff, IReadOnlyList<IPhysicalEditAction> actions)
+    internal void Commit(ProjectDocument before, ProjectDocument after, TransactionDiff diff, IReadOnlyList<IPhysicalEditAction> actions)
     {
-        Document = document;
+        Document = after;
         IsDirty = true;
-        _undo.Push(diff);
+        _undo.Push(new CommittedTransaction(before, after, diff, actions.ToArray()));
         _redo.Clear();
-        journal?.Append(document.Project.ProjectId, diff.BaseProjectRevision, actions);
+        journal?.Append(after.Project.ProjectId, diff.BaseProjectRevision, actions);
     }
+
+    private sealed record CommittedTransaction(
+        ProjectDocument Before,
+        ProjectDocument After,
+        TransactionDiff Diff,
+        IReadOnlyList<IPhysicalEditAction> Actions);
 }
 
 public sealed class PhysicalDesignTransaction
@@ -186,10 +234,13 @@ public sealed class PhysicalDesignTransaction
     {
         var affectedComponents = ChangedComponents(before, after);
         var affectedNets = AffectedNets(after, affectedComponents);
+        var affectedRegions = ChangedRegions(before, after);
         var affectedConstraints = ChangedConstraints(before, after);
         var affectedRoutes = AffectedRoutingResources(after, affectedNets);
         var directChanges = new List<EntityReference>();
         directChanges.AddRange(affectedComponents);
+        directChanges.AddRange(ChangedGroups(before, after));
+        directChanges.AddRange(affectedRegions);
         directChanges.AddRange(affectedConstraints);
         if (!Equals(before.Metadata, after.Metadata))
         {
@@ -209,8 +260,12 @@ public sealed class PhysicalDesignTransaction
             DistinctRefs(directChanges),
             affectedComponents,
             affectedNets,
+            affectedRegions,
             affectedConstraints,
             affectedRoutes,
+            [],
+            [],
+            new Dictionary<string, double>(StringComparer.Ordinal),
             reason,
             source);
     }
@@ -240,6 +295,24 @@ public sealed class PhysicalDesignTransaction
         return after.Constraints
             .Where(c => !beforeConstraints.TryGetValue(c.Id.Value, out var previous) || !Equals(previous, c))
             .Select(c => new EntityReference("CONSTRAINT", c.Id.Value))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<EntityReference> ChangedGroups(CanonicalProject before, CanonicalProject after)
+    {
+        var beforeGroups = before.LogicalDesign.Groups.ToDictionary(g => g.Id.Value, StringComparer.Ordinal);
+        return after.LogicalDesign.Groups
+            .Where(g => !beforeGroups.TryGetValue(g.Id.Value, out var previous) || !Equals(previous, g))
+            .Select(g => new EntityReference("GROUP", g.Id.Value))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<EntityReference> ChangedRegions(CanonicalProject before, CanonicalProject after)
+    {
+        var beforeRegions = before.Board.Regions.ToDictionary(r => r.Id.Value, StringComparer.Ordinal);
+        return after.Board.Regions
+            .Where(r => !beforeRegions.TryGetValue(r.Id.Value, out var previous) || !Equals(previous, r))
+            .Select(r => new EntityReference("REGION", r.Id.Value))
             .ToArray();
     }
 
@@ -412,10 +485,85 @@ public sealed record UpdateManufacturingCapabilityAction(string CapabilityKey, S
     public JournalAction ToJournalAction() => new("UpdateManufacturingCapability", CapabilityKey, null, null, null, null, JsonSerializer.Serialize(Value));
 }
 
+public sealed record UpsertGroupAction(Group Group) : IPhysicalEditAction
+{
+    public bool ChangesPhysicalState => false;
+    public bool ChangesManufacturingRules => false;
+    public bool ChangesConstraints => false;
+
+    public AppliedProjectChange Apply(CanonicalProject project)
+    {
+        var groups = project.LogicalDesign.Groups
+            .Where(g => g.Id != Group.Id)
+            .Append(Group)
+            .OrderBy(g => g.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        return new AppliedProjectChange(project with { LogicalDesign = project.LogicalDesign with { Groups = groups } }, [new EntityReference("GROUP", Group.Id.Value)]);
+    }
+
+    public JournalAction ToJournalAction() => new("UpsertGroup", Group.Id.Value, null, null, null, null, JsonSerializer.Serialize(Group));
+}
+
+public sealed record DeleteGroupAction(GroupId GroupId) : IPhysicalEditAction
+{
+    public bool ChangesPhysicalState => false;
+    public bool ChangesManufacturingRules => false;
+    public bool ChangesConstraints => false;
+
+    public AppliedProjectChange Apply(CanonicalProject project)
+    {
+        var groups = project.LogicalDesign.Groups.Where(g => g.Id != GroupId).ToArray();
+        return new AppliedProjectChange(project with { LogicalDesign = project.LogicalDesign with { Groups = groups } }, [new EntityReference("GROUP", GroupId.Value)]);
+    }
+
+    public JournalAction ToJournalAction() => new("DeleteGroup", GroupId.Value, null, null, null, null, null);
+}
+
+public sealed record UpsertRegionAction(Region Region) : IPhysicalEditAction
+{
+    public bool ChangesPhysicalState => false;
+    public bool ChangesManufacturingRules => false;
+    public bool ChangesConstraints => false;
+
+    public AppliedProjectChange Apply(CanonicalProject project)
+    {
+        var regions = project.Board.Regions
+            .Where(r => r.Id != Region.Id)
+            .Append(Region)
+            .OrderBy(r => r.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        return new AppliedProjectChange(project with { Board = project.Board with { Regions = regions } }, [new EntityReference("REGION", Region.Id.Value)]);
+    }
+
+    public JournalAction ToJournalAction() => new("UpsertRegion", Region.Id.Value, null, null, null, null, JsonSerializer.Serialize(Region));
+}
+
+public sealed record DeleteRegionAction(RegionId RegionId) : IPhysicalEditAction
+{
+    public bool ChangesPhysicalState => false;
+    public bool ChangesManufacturingRules => false;
+    public bool ChangesConstraints => false;
+
+    public AppliedProjectChange Apply(CanonicalProject project)
+    {
+        var regions = project.Board.Regions.Where(r => r.Id != RegionId).ToArray();
+        return new AppliedProjectChange(project with { Board = project.Board with { Regions = regions } }, [new EntityReference("REGION", RegionId.Value)]);
+    }
+
+    public JournalAction ToJournalAction() => new("DeleteRegion", RegionId.Value, null, null, null, null, null);
+}
+
 public sealed record DependencyGraph(
     IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> ComponentNets,
     IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> NetComponents,
-    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> NetRoutes)
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> NetRoutes,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> ComponentFootprints,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> EntityGroups,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> GroupMembers,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> EntityConstraints,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> RegionConstraints,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> RegionEntities,
+    IReadOnlyDictionary<string, IReadOnlyList<EntityReference>> SpatialNeighborhood)
 {
     public static DependencyGraph From(CanonicalProject project)
     {
@@ -437,10 +585,56 @@ public sealed record DependencyGraph(
             Add(netRoutes, route.NetId.Value, new EntityReference("ROUTE", route.Id.Value));
         }
 
+        var componentFootprints = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        foreach (var component in project.LogicalDesign.Components.Where(c => c.FootprintId is not null))
+        {
+            Add(componentFootprints, component.Id.Value, new EntityReference("FOOTPRINT", component.FootprintId!.Value.Value));
+        }
+
+        var entityGroups = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        var groupMembers = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        foreach (var group in project.LogicalDesign.Groups)
+        {
+            foreach (var member in group.Members)
+            {
+                var memberRef = new EntityReference(member.EntityType, member.EntityId);
+                Add(groupMembers, group.Id.Value, memberRef);
+                Add(entityGroups, Key(memberRef), new EntityReference("GROUP", group.Id.Value));
+            }
+        }
+
+        var entityConstraints = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        var regionConstraints = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        foreach (var constraint in project.Constraints)
+        {
+            var constraintRef = new EntityReference("CONSTRAINT", constraint.Id.Value);
+            foreach (var reference in SelectorRefs(constraint.Source).Concat(constraint.Target is null ? [] : SelectorRefs(constraint.Target)))
+            {
+                Add(entityConstraints, Key(reference), constraintRef);
+                if (reference.EntityType.Equals("REGION", StringComparison.OrdinalIgnoreCase))
+                {
+                    Add(regionConstraints, reference.EntityId, constraintRef);
+                }
+            }
+        }
+
+        var regionEntities = new Dictionary<string, List<EntityReference>>(StringComparer.Ordinal);
+        foreach (var region in project.Board.Regions)
+        {
+            Add(regionEntities, region.Id.Value, new EntityReference("REGION", region.Id.Value));
+        }
+
         return new DependencyGraph(
             componentNets.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
             netComponents.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
-            netRoutes.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal));
+            netRoutes.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            componentFootprints.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            entityGroups.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            groupMembers.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            entityConstraints.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            regionConstraints.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            regionEntities.ToDictionary(k => k.Key, v => (IReadOnlyList<EntityReference>)v.Value.ToArray(), StringComparer.Ordinal),
+            new Dictionary<string, IReadOnlyList<EntityReference>>(StringComparer.Ordinal));
 
         static void Add(Dictionary<string, List<EntityReference>> map, string key, EntityReference value)
         {
@@ -453,6 +647,21 @@ public sealed record DependencyGraph(
             if (!values.Contains(value))
             {
                 values.Add(value);
+            }
+        }
+
+        static string Key(EntityReference reference) => reference.EntityType.ToUpperInvariant() + "\u001f" + reference.EntityId;
+
+        static IEnumerable<EntityReference> SelectorRefs(ConstraintSelector selector)
+        {
+            if (selector.EntityType is null)
+            {
+                yield break;
+            }
+
+            foreach (var id in selector.EntityIds)
+            {
+                yield return new EntityReference(selector.EntityType, id);
             }
         }
     }
@@ -473,7 +682,7 @@ public sealed class EditImpactPlanner : IEditImpactPlanner
         }
 
         var stages = new List<DerivedArtifactStage>();
-        if (diff.DirectChanges.Any(r => r.EntityType == "COMPONENT"))
+        if (diff.DirectChanges.Any(r => r.EntityType == "COMPONENT" || r.EntityType == "REGION" || r.EntityType == "GROUP"))
         {
             stages.AddRange([
                 DerivedArtifactStage.AbsoluteGeometry,
@@ -505,7 +714,7 @@ public sealed class EditImpactPlanner : IEditImpactPlanner
 
         var distinctStages = stages.Distinct().ToArray();
         var earliest = distinctStages.Length == 0 ? DerivedArtifactStage.CanonicalIntegrity : distinctStages.Min();
-        var scope = diff.DirectChanges.Concat(diff.AffectedNets).Concat(diff.AffectedRoutingResources)
+        var scope = diff.DirectChanges.Concat(diff.AffectedNets).Concat(diff.AffectedRegions).Concat(diff.AffectedRoutingResources)
             .DistinctBy(r => r.EntityType + "\u001f" + r.EntityId)
             .ToArray();
         var steps = distinctStages
@@ -609,7 +818,10 @@ public interface IRecoveryJournal
 
 public sealed class FileRecoveryJournal(string directory) : IRecoveryJournal
 {
-    private static readonly JsonSerializerOptions JsonOptions = new();
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public void Append(ProjectId projectId, long baseProjectRevision, IReadOnlyList<IPhysicalEditAction> actions)
     {
@@ -633,6 +845,11 @@ public sealed class FileRecoveryJournal(string directory) : IRecoveryJournal
             if (!StringComparer.Ordinal.Equals(record.ProjectId, baseDocument.Project.ProjectId.Value))
             {
                 continue;
+            }
+
+            if (record.BaseProjectRevision != session.ProjectRevision)
+            {
+                throw new InvalidDataException($"Recovery journal base revision mismatch. Record expects {record.BaseProjectRevision}, current session revision is {session.ProjectRevision}.");
             }
 
             var transaction = session.BeginTransaction("journal replay", "journal");
@@ -666,9 +883,19 @@ public sealed class FileRecoveryJournal(string directory) : IRecoveryJournal
             "RotateComponent" => new RotateComponentAction(new ComponentId(action.Id), new AngleDegrees((decimal)(action.Numeric ?? 0)), "journal"),
             "ChangeComponentSide" => new ChangeComponentSideAction(new ComponentId(action.Id), action.Text ?? "TOP", "journal"),
             "SetComponentLock" => new SetComponentLockAction(new ComponentId(action.Id), string.Equals(action.Text, "LOCKED", StringComparison.Ordinal), "journal"),
+            "UpsertConstraint" => new UpsertConstraintAction(JsonSerializer.Deserialize<ConstraintDefinition>(RequiredPayload(action), JsonOptions) ?? throw new InvalidDataException("Invalid UpsertConstraint journal payload.")),
             "DeleteConstraint" => new DeleteConstraintAction(new ConstraintId(action.Id)),
+            "UpdateProjectMetadata" => new UpdateProjectMetadataAction(action.Id, action.Text),
+            "UpdateManufacturingCapability" => new UpdateManufacturingCapabilityAction(action.Id, JsonSerializer.Deserialize<SourcedValue>(RequiredPayload(action), JsonOptions) ?? throw new InvalidDataException("Invalid UpdateManufacturingCapability journal payload.")),
+            "UpsertGroup" => new UpsertGroupAction(JsonSerializer.Deserialize<Group>(RequiredPayload(action), JsonOptions) ?? throw new InvalidDataException("Invalid UpsertGroup journal payload.")),
+            "DeleteGroup" => new DeleteGroupAction(new GroupId(action.Id)),
+            "UpsertRegion" => new UpsertRegionAction(JsonSerializer.Deserialize<Region>(RequiredPayload(action), JsonOptions) ?? throw new InvalidDataException("Invalid UpsertRegion journal payload.")),
+            "DeleteRegion" => new DeleteRegionAction(new RegionId(action.Id)),
             _ => throw new NotSupportedException($"Journal action '{action.Kind}' is not supported for replay.")
         };
+
+    private static string RequiredPayload(JournalAction action) =>
+        action.PayloadJson ?? throw new InvalidDataException($"Journal action '{action.Kind}' requires a payload.");
 
     private sealed record JournalRecord(string ProjectId, long BaseProjectRevision, IReadOnlyList<JournalAction> Actions);
 }

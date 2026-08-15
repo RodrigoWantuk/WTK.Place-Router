@@ -1,5 +1,6 @@
 using PlaceRouter.Core.Diagnostics;
 using PlaceRouter.Domain.Model;
+using PlaceRouter.Application.Lifecycle;
 
 namespace PlaceRouter.Application.Projects;
 
@@ -17,6 +18,9 @@ public sealed class ProjectService(
 
     public ProjectSaveResult SaveProject(ProjectDocument document, string path) =>
         store.Save(document, path);
+
+    public ProjectSaveResult SaveSession(ProjectSession session, string path) =>
+        session.Save(store, path);
 
     public ProjectValidationResult ValidateProject(CanonicalProject project) => validator.Validate(project);
 

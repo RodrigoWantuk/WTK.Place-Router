@@ -10,12 +10,14 @@ public sealed class ProjectCoordinator
 {
     private readonly ProjectService _projectService;
     private readonly ConstraintEvaluationService _evaluationService;
+    private readonly IRecoveryJournal? _journal;
     private readonly List<string> _recentProjects = [];
 
-    public ProjectCoordinator(ProjectService projectService, ConstraintEvaluationService? evaluationService = null)
+    public ProjectCoordinator(ProjectService projectService, ConstraintEvaluationService? evaluationService = null, IRecoveryJournal? journal = null)
     {
         _projectService = projectService;
         _evaluationService = evaluationService ?? new ConstraintEvaluationService();
+        _journal = journal;
     }
 
     public event EventHandler? ProjectChanged;
@@ -28,7 +30,7 @@ public sealed class ProjectCoordinator
 
     public string? CurrentPath { get; private set; }
 
-    public bool IsDirty { get; private set; }
+    public bool IsDirty => Session?.IsDirty ?? false;
 
     public IReadOnlyList<Diagnostic> Diagnostics { get; private set; } = [];
 
@@ -42,6 +44,9 @@ public sealed class ProjectCoordinator
         Attach(document, null, [], dirty: true);
         return document;
     }
+
+    public Task<ProjectDocument> NewProjectAsync(string name) =>
+        Task.FromResult(NewProject(name));
 
     public ImportResult ImportDesign(string path, SourceRetentionPolicy retentionPolicy)
     {
@@ -59,9 +64,41 @@ public sealed class ProjectCoordinator
         return result;
     }
 
+    public async Task<ImportResult> ImportDesignAsync(string path, SourceRetentionPolicy retentionPolicy)
+    {
+        var result = await Task.Run(() => _projectService.ImportDesign(new ImportRequest(path, retentionPolicy))).ConfigureAwait(true);
+        if (result.Document is not null)
+        {
+            Attach(result.Document, null, result.Diagnostics, dirty: true);
+        }
+        else
+        {
+            Diagnostics = result.Diagnostics;
+            ProjectChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        return result;
+    }
+
     public ProjectLoadResult OpenProject(string path)
     {
         var result = _projectService.LoadProject(path);
+        if (result.Document is not null)
+        {
+            Attach(result.Document, path, result.Diagnostics, dirty: false);
+        }
+        else
+        {
+            Diagnostics = result.Diagnostics;
+            ProjectChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        return result;
+    }
+
+    public async Task<ProjectLoadResult> OpenProjectAsync(string path)
+    {
+        var result = await Task.Run(() => _projectService.LoadProject(path)).ConfigureAwait(true);
         if (result.Document is not null)
         {
             Attach(result.Document, path, result.Diagnostics, dirty: false);
@@ -98,12 +135,46 @@ public sealed class ProjectCoordinator
             return new ProjectSaveResult([diagnostic]);
         }
 
-        var result = _projectService.SaveProject(Document, path);
+        var result = Session is null
+            ? _projectService.SaveProject(Document, path)
+            : _projectService.SaveSession(Session, path);
         Diagnostics = result.Diagnostics;
         if (result.Success)
         {
             CurrentPath = path;
-            IsDirty = false;
+            AddRecent(path);
+        }
+
+        ProjectChanged?.Invoke(this, EventArgs.Empty);
+        return result;
+    }
+
+    public Task<ProjectSaveResult> SaveProjectAsync()
+    {
+        if (Document is null || string.IsNullOrWhiteSpace(CurrentPath))
+        {
+            return Task.FromResult(SaveProject());
+        }
+
+        return SaveProjectAsAsync(CurrentPath);
+    }
+
+    public async Task<ProjectSaveResult> SaveProjectAsAsync(string path)
+    {
+        if (Document is null)
+        {
+            return SaveProject();
+        }
+
+        var document = Document;
+        var session = Session;
+        var result = await Task.Run(() => session is null
+            ? _projectService.SaveProject(document, path)
+            : _projectService.SaveSession(session, path)).ConfigureAwait(true);
+        Diagnostics = result.Diagnostics;
+        if (result.Success)
+        {
+            CurrentPath = path;
             AddRecent(path);
         }
 
@@ -115,7 +186,6 @@ public sealed class ProjectCoordinator
     {
         Session = null;
         CurrentPath = null;
-        IsDirty = false;
         Diagnostics = [];
         ConstraintReport = null;
         ProjectChanged?.Invoke(this, EventArgs.Empty);
@@ -132,9 +202,12 @@ public sealed class ProjectCoordinator
 
     private void Attach(ProjectDocument document, string? path, IReadOnlyList<Diagnostic> diagnostics, bool dirty)
     {
-        Session = new ProjectSession(document);
+        Session = new ProjectSession(document, _journal);
+        if (dirty)
+        {
+            Session.MarkDirty();
+        }
         CurrentPath = path;
-        IsDirty = dirty;
         Diagnostics = diagnostics;
         ConstraintReport = _evaluationService.Evaluate(document.Project);
         if (!string.IsNullOrWhiteSpace(path))
