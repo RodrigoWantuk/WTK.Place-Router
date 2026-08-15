@@ -58,10 +58,13 @@ public sealed record EffectiveConstraintSet(
                     .Where(c => TrackMatches(c.Source, route, track, resolver))
                     .Where(c => ScopeApplies(c.Scope, trackScope))
                     .ToArray();
-                var merged = Merge(applicable, new EntityReference("TRACK_SEGMENT", track.Id.Value), null, trackScope, "MinimumTrackWidth");
-                if (merged is not null)
+                foreach (var group in applicable.GroupBy(c => EnforcementClass(c.Enforcement), StringComparer.Ordinal))
                 {
-                    result.Add(merged);
+                    var merged = Merge(group.ToArray(), new EntityReference("TRACK_SEGMENT", track.Id.Value), null, trackScope, "MinimumTrackWidth");
+                    if (merged is not null)
+                    {
+                        result.Add(merged);
+                    }
                 }
             }
         }
@@ -223,6 +226,15 @@ public sealed record EffectiveConstraintSet(
 
     private static bool IsRequired(EffectiveConstraint constraint) =>
         string.Equals(constraint.Enforcement, "REQUIRED", StringComparison.OrdinalIgnoreCase);
+
+    private static string EnforcementClass(string enforcement) =>
+        ConstraintSelectorResolver.Canon(enforcement) switch
+        {
+            "REQUIRED" => "REQUIRED",
+            "PREFERRED" => "PREFERRED",
+            "OPTIMIZATIONGOAL" => "OPTIMIZATION_GOAL",
+            _ => enforcement.ToUpperInvariant()
+        };
 
     private static bool HasUnknownParameter(JsonElement parameters) =>
         parameters.TryGetProperty("status", out var status) &&
@@ -867,7 +879,7 @@ public sealed class ConstraintEvaluationService
             }
 
             var inside = _kernel.Contains(board.Geometry, obj.Geometry);
-            var actual = inside ? new LengthUnits(DistanceToOuterBoundary(board.Geometry, obj.Geometry)) : new LengthUnits(0);
+            var actual = inside ? new LengthUnits(DistanceToBoardEdges(board.Geometry, obj.Geometry)) : new LengthUnits(0);
             var pass = inside && actual.Value >= required.Value.Value;
             yield return Result(constraint, pass ? ConstraintEvaluationStatus.Pass : ConstraintEvaluationStatus.Fail, [new EntityReference(obj.EntityType, obj.EntityId)], required, actual, ConstraintEvidence.From(("insideBoard", inside)), pass ? null : "Copper-to-edge distance is below minimum or outside board.");
         }
@@ -1136,8 +1148,8 @@ public sealed class ConstraintEvaluationService
             return FilterScope(all, scope);
         }
 
-        var keys = refs.Select(r => (Type: ConstraintSelectorResolver.Canon(r.EntityType), r.EntityId)).ToHashSet();
-        return FilterScope(all.Where(o => keys.Contains((ConstraintSelectorResolver.Canon(o.EntityType), o.EntityId))), scope);
+        return FilterScope(all.Where(o => refs.Any(r => MatchesPhysicalReference(geometry, o, r))), scope)
+            .DistinctBy(o => o.Id);
     }
 
     private static IEnumerable<PhysicalObject> CopperObjects(PhysicalGeometryModel geometry, IReadOnlyList<EntityReference> refs, ConstraintSelector selector, ConstraintScope scope) =>
@@ -1182,6 +1194,36 @@ public sealed class ConstraintEvaluationService
         var keys = new[] { $"{first.EntityType}:{first.EntityId}:{first.Id}", $"{second.EntityType}:{second.EntityId}:{second.Id}" }
             .Order(StringComparer.Ordinal);
         return string.Join("|", keys);
+    }
+
+    private static bool MatchesPhysicalReference(PhysicalGeometryModel geometry, PhysicalObject obj, EntityReference reference)
+    {
+        var type = ConstraintSelectorResolver.Canon(reference.EntityType);
+        return type switch
+        {
+            "NET" => obj.NetId is not null && string.Equals(obj.NetId.Value.Value, reference.EntityId, StringComparison.Ordinal),
+            "ROUTE" => obj.RouteIds is not null && obj.RouteIds.Any(r => string.Equals(r.Value, reference.EntityId, StringComparison.Ordinal)),
+            "TRACKSEGMENT" => obj.Kind == PhysicalObjectKind.Track && string.Equals(obj.EntityId, reference.EntityId, StringComparison.Ordinal),
+            "VIA" => obj.Kind == PhysicalObjectKind.Via && string.Equals(obj.EntityId, reference.EntityId, StringComparison.Ordinal),
+            "COPPERZONE" => obj.Kind == PhysicalObjectKind.CopperZone && string.Equals(obj.EntityId, reference.EntityId, StringComparison.Ordinal),
+            "PAD" => obj.Kind == PhysicalObjectKind.Pad && string.Equals(obj.EntityId, reference.EntityId, StringComparison.Ordinal),
+            "COMPONENT" => MatchesComponentReference(geometry, obj, reference.EntityId),
+            _ => string.Equals(ConstraintSelectorResolver.Canon(obj.EntityType), type, StringComparison.Ordinal) &&
+                string.Equals(obj.EntityId, reference.EntityId, StringComparison.Ordinal)
+        };
+    }
+
+    private static bool MatchesComponentReference(PhysicalGeometryModel geometry, PhysicalObject obj, string componentId)
+    {
+        if (string.Equals(ConstraintSelectorResolver.Canon(obj.EntityType), "COMPONENT", StringComparison.Ordinal) &&
+            string.Equals(obj.EntityId, componentId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return geometry.Components.Any(c =>
+            string.Equals(c.Component.Id.Value, componentId, StringComparison.Ordinal) &&
+            c.Objects.Any(o => string.Equals(o.Id, obj.Id, StringComparison.Ordinal)));
     }
 
     private static bool AppliesTo(PhysicalObject keepout, PhysicalObjectKind kind)
@@ -1299,10 +1341,11 @@ public sealed class ConstraintEvaluationService
         return (long)Math.Ceiling(Math.Sqrt((double)dx * dx + (double)dy * dy));
     }
 
-    private static long DistanceToOuterBoundary(GeometryPolygon container, GeometryPolygon candidate)
+    private static long DistanceToBoardEdges(GeometryPolygon container, GeometryPolygon candidate)
     {
         var min = double.PositiveInfinity;
-        var containerEdges = RingEdges(container.Outer).ToArray();
+        var boardRings = new[] { container.Outer }.Concat(container.Holes).ToArray();
+        var containerEdges = boardRings.SelectMany(RingEdges).ToArray();
         var candidateEdges = RingEdges(candidate.Outer).ToArray();
         foreach (var point in candidate.Outer)
         {
@@ -1312,7 +1355,7 @@ public sealed class ConstraintEvaluationService
             }
         }
 
-        foreach (var point in container.Outer)
+        foreach (var point in boardRings.SelectMany(r => r))
         {
             foreach (var edge in candidateEdges)
             {

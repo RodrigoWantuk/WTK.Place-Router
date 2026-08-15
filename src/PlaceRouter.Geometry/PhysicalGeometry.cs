@@ -25,7 +25,8 @@ public sealed record PhysicalObject(
     LayerId? LayerId,
     NetId? NetId,
     IReadOnlySet<string>? AppliesTo = null,
-    IReadOnlySet<LayerId>? LayerSpan = null)
+    IReadOnlySet<LayerId>? LayerSpan = null,
+    IReadOnlySet<RouteId>? RouteIds = null)
 {
     public GeometryEnvelope Envelope => Geometry.Envelope;
 }
@@ -104,13 +105,14 @@ public sealed class PhysicalGeometryBuilder
             .Cast<ComponentGeometry>()
             .ToArray();
 
+        var routeIdsByVia = RouteIdsByVia(project);
         return new PhysicalGeometryModel(
             components,
             BuildBoard(project).ToArray(),
             project.Board.Regions.Select(r => new PhysicalObject(r.Id.Value, "REGION", r.Id.Value, PhysicalObjectKind.Region, GeometryPolygon.From(r.Geometry), null, null)).ToArray(),
             BuildKeepouts(project).ToArray(),
             BuildRoutes(project).ToArray(),
-            BuildVias(project).ToArray(),
+            BuildVias(project, routeIdsByVia).ToArray(),
             BuildCopperZones(project).ToArray());
     }
 
@@ -215,7 +217,8 @@ public sealed class PhysicalGeometryBuilder
                     PhysicalObjectKind.Track,
                     TrackPolygon(track),
                     track.LayerId,
-                    route.NetId);
+                    route.NetId,
+                    RouteIds: new HashSet<RouteId> { route.Id });
             }
         }
     }
@@ -231,12 +234,13 @@ public sealed class PhysicalGeometryBuilder
         return Capsule(GeometryPoint.From(track.Start), GeometryPoint.From(track.End), half);
     }
 
-    private static IEnumerable<PhysicalObject> BuildVias(CanonicalProject project)
+    private static IEnumerable<PhysicalObject> BuildVias(CanonicalProject project, IReadOnlyDictionary<ViaId, IReadOnlySet<RouteId>> routeIdsByVia)
     {
         foreach (var via in project.PhysicalDesignState.Vias)
         {
             var radius = Math.Max(1, via.OuterDiameter.Value / 2);
-            yield return new PhysicalObject(via.Id.Value, "VIA", via.Id.Value, PhysicalObjectKind.Via, Circle(GeometryPoint.From(via.Position), radius), null, via.NetId, null, ViaLayerSpan(via, project.Board.Layers));
+            routeIdsByVia.TryGetValue(via.Id, out var routeIds);
+            yield return new PhysicalObject(via.Id.Value, "VIA", via.Id.Value, PhysicalObjectKind.Via, Circle(GeometryPoint.From(via.Position), radius), null, via.NetId, null, ViaLayerSpan(via, project.Board.Layers), routeIds);
         }
     }
 
@@ -383,6 +387,26 @@ public sealed class PhysicalGeometryBuilder
         project.LogicalDesign.Nets
             .SelectMany(net => net.Endpoints.Where(e => e.PadId is not null).Select(e => (e.ComponentId.Value, e.PadId!.Value.Value, net.Id)))
             .ToDictionary(e => (e.Item1, e.Item2), e => e.Id);
+
+    private static IReadOnlyDictionary<ViaId, IReadOnlySet<RouteId>> RouteIdsByVia(CanonicalProject project)
+    {
+        var map = new Dictionary<ViaId, HashSet<RouteId>>();
+        foreach (var route in project.PhysicalDesignState.Routes)
+        {
+            foreach (var viaId in route.ViaIds)
+            {
+                if (!map.TryGetValue(viaId, out var routeIds))
+                {
+                    routeIds = [];
+                    map[viaId] = routeIds;
+                }
+
+                routeIds.Add(route.Id);
+            }
+        }
+
+        return map.ToDictionary(k => k.Key, v => (IReadOnlySet<RouteId>)v.Value);
+    }
 
     private static IReadOnlySet<LayerId> ViaLayerSpan(Via via, IReadOnlyList<BoardLayer> layers)
     {

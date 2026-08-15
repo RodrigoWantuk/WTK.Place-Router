@@ -429,6 +429,76 @@ public sealed class Plan02GeometryConstraintTests
         Assert.Equal(clearanceFailures.Length, clearanceFailures.Select(e => e.AffectedEntities.Select(a => $"{a.EntityType}:{a.EntityId}").Order(StringComparer.Ordinal).Aggregate((a, b) => a + "|" + b)).Distinct().Count());
     }
 
+    [Fact]
+    public void Net_selector_expands_to_physical_copper_for_minimum_clearance()
+    {
+        var project = Project(
+            nets: [Net("net_a", "A"), Net("net_b", "B"), Net("net_c", "C")],
+            routes:
+            [
+                Route("route_a", "net_a", Track("trk_a", "layer_top_cu", 100, 1000, 1000, 2000, 1000)),
+                Route("route_b", "net_b", Track("trk_b", "layer_top_cu", 100, 1000, 1300, 2000, 1300)),
+                Route("route_c", "net_c", Track("trk_c", "layer_top_cu", 100, 1000, 1080, 2000, 1080))
+            ],
+            constraints:
+            [
+                Constraint(
+                    "net_a_to_b_clearance",
+                    "MinimumClearance",
+                    "REQUIRED",
+                    Entity("NET", "net_a"),
+                    Param(("minimumUnits", 500)),
+                    target: Entity("NET", "net_b"))
+            ]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+        var evaluation = Assert.Single(report.Evaluations, e => e.ConstraintId.Value == "net_a_to_b_clearance");
+
+        Assert.Equal(ConstraintEvaluationStatus.Fail, evaluation.Status);
+        Assert.Contains(evaluation.AffectedEntities, e => e.EntityId == "trk_a");
+        Assert.Contains(evaluation.AffectedEntities, e => e.EntityId == "trk_b");
+        Assert.DoesNotContain(evaluation.AffectedEntities, e => e.EntityId == "trk_c");
+    }
+
+    [Fact]
+    public void Minimum_track_width_keeps_preferred_rule_alongside_required_rule()
+    {
+        var project = Project(
+            poses: [Pose("cmp_u1", 4000, 2500), Pose("cmp_u2", 4500, 2500)],
+            routes: [Route("route_1", "net_in", Track("trk_1", "layer_top_cu", 200, 1000, 1000, 2000, 1000))],
+            manufacturingMinimumTraceWidth: 150,
+            constraints:
+            [
+                Constraint("pref_width", "MinimumTrackWidth", "PREFERRED", Entity("NET", "net_in"), Param(("minimumUnits", 300)))
+            ]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+
+        Assert.Contains(report.Evaluations, e => e.ConstraintId.Value == "mfg_min_track_width" && e.Enforcement == "REQUIRED" && e.Status == ConstraintEvaluationStatus.Pass && e.RequiredUnits!.Value.Value == 150);
+        Assert.Contains(report.Evaluations, e => e.ConstraintId.Value == "pref_width" && e.Enforcement == "PREFERRED" && e.Status == ConstraintEvaluationStatus.Fail && e.RequiredUnits!.Value.Value == 300);
+        Assert.True(report.CandidateValid);
+    }
+
+    [Fact]
+    public void Copper_to_edge_measures_cutout_boundaries()
+    {
+        var project = Project(
+            boardCutouts: [Rect(2000, 1000, 3000, 2000).ToPolygon2()],
+            routes: [Route("route_1", "net_in", Track("trk_near_cutout", "layer_top_cu", 100, 1500, 1500, 1850, 1500))],
+            constraints:
+            [
+                Constraint("net_to_cutout_edge", "CopperToEdge", "REQUIRED", Entity("NET", "net_in"), Param(("minimumUnits", 250)))
+            ]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+
+        Assert.Contains(report.Evaluations, e =>
+            e.ConstraintId.Value == "net_to_cutout_edge" &&
+            e.Status == ConstraintEvaluationStatus.Fail &&
+            e.AffectedEntities.Any(a => a.EntityId == "trk_near_cutout") &&
+            e.ActualUnits!.Value.Value < 250);
+    }
+
     private static CanonicalProject Project(
         IReadOnlyList<Component>? components = null,
         IReadOnlyList<Footprint>? footprints = null,
@@ -439,6 +509,7 @@ public sealed class Plan02GeometryConstraintTests
         IReadOnlyList<Via>? vias = null,
         IReadOnlyList<Keepout>? keepouts = null,
         IReadOnlyList<BoardLayer>? boardLayers = null,
+        IReadOnlyList<Polygon2>? boardCutouts = null,
         long manufacturingMinimumTraceWidth = 150,
         bool omitMinimumTraceWidth = false) =>
         new(
@@ -453,7 +524,7 @@ public sealed class Plan02GeometryConstraintTests
                 nets ?? [Net("net_in", "IN"), Net("net_gnd", "GND")],
                 [],
                 []),
-            Board(keepouts, boardLayers),
+            Board(keepouts, boardLayers, boardCutouts),
             Manufacturing(manufacturingMinimumTraceWidth, omitMinimumTraceWidth),
             constraints ?? [],
             new Semantics([]),
@@ -478,11 +549,11 @@ public sealed class Plan02GeometryConstraintTests
             [],
             Provenance.UserDefined);
 
-    private static BoardDefinition Board(IReadOnlyList<Keepout>? keepouts = null, IReadOnlyList<BoardLayer>? layers = null) =>
+    private static BoardDefinition Board(IReadOnlyList<Keepout>? keepouts = null, IReadOnlyList<BoardLayer>? layers = null, IReadOnlyList<Polygon2>? cutouts = null) =>
         new(
             new Point2(new LengthUnits(0), new LengthUnits(0)),
             Rect(0, 0, 5000, 3000).ToPolygon2(),
-            [],
+            cutouts ?? [],
             [],
             null,
             null,
