@@ -288,14 +288,157 @@ public sealed class Plan02GeometryConstraintTests
         Assert.Equal(2, widthFindings.Select(f => f.Id).Distinct(StringComparer.Ordinal).Count());
     }
 
+    [Fact]
+    public void Effective_minimum_track_width_uses_strictest_required_rule_for_evaluation()
+    {
+        var project = Project(
+            routes: [Route("route_1", "net_in", Track("trk_1", "layer_top_cu", 150, 1000, 1000, 2000, 1000))],
+            manufacturingMinimumTraceWidth: 300,
+            constraints: [Constraint("c_net_width", "MinimumTrackWidth", "REQUIRED", Entity("NET", "net_in"), Param(("minimumUnits", 100)))]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+        var effective = new EffectiveConstraintResolver()
+            .Resolve(project, ManufacturingRuleResolver.Resolve(project.ManufacturingProfile))
+            .EffectiveFor(new EntityReference("NET", "net_in"), null, new ConstraintScope([new LayerId("layer_top_cu")], null, null, ["TRACK"]), "MinimumTrackWidth", new ConstraintSelectorResolver(project));
+
+        Assert.Equal("mfg_min_track_width", effective!.Id.Value);
+        Assert.Contains(report.Evaluations, e => e.ConstraintId.Value == "mfg_min_track_width" && e.Status == ConstraintEvaluationStatus.Fail && e.RequiredUnits!.Value.Value == 300);
+        Assert.DoesNotContain(report.Evaluations, e => e.ConstraintId.Value == "c_net_width");
+    }
+
+    [Fact]
+    public void Effective_set_reports_conflict_for_overlapping_allowed_sets()
+    {
+        var project = Project(constraints:
+        [
+            Constraint("all_top", "AllowedSide", "REQUIRED", AllComponents(), Json("""{"allowedSides":["TOP"]}""")),
+            Constraint("u1_bottom", "AllowedSide", "REQUIRED", Entity("COMPONENT", "cmp_u1"), Json("""{"allowedSides":["BOTTOM"]}"""))
+        ]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+
+        Assert.Contains(report.Conflicts, c => c.FirstConstraintId.Value == "all_top" && c.SecondConstraintId.Value == "u1_bottom");
+    }
+
+    [Fact]
+    public void Route_selector_that_is_not_route_or_net_does_not_expand_to_all_routes()
+    {
+        var project = Project(
+            routes: [Route("route_1", "net_in", Track("trk_1", "layer_top_cu", 250, 1000, 1000, 2000, 1000))],
+            constraints: [Constraint("bad_length_selector", "MaximumLength", "REQUIRED", Entity("COMPONENT", "cmp_u1"), Param(("maximumUnits", 10)))]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+
+        Assert.Contains(report.Evaluations, e => e.ConstraintId.Value == "bad_length_selector" && e.Status == ConstraintEvaluationStatus.Unknown);
+        Assert.DoesNotContain(report.Evaluations, e => e.ConstraintId.Value == "bad_length_selector" && e.AffectedEntities.Any(a => a.EntityType == "ROUTE"));
+    }
+
+    [Fact]
+    public void Explicit_via_constraint_respects_net_selector_and_layer_scope()
+    {
+        var vias = new[]
+        {
+            Via("via_in", "net_in", "MICROVIA", "layer_top_cu", "layer_bottom_cu"),
+            Via("via_gnd", "net_gnd", "MICROVIA", "layer_top_cu", "layer_bottom_cu")
+        };
+        var project = Project(
+            vias: vias,
+            constraints:
+            [
+                Constraint(
+                    "via_type_net_in",
+                    "AllowedViaTypes",
+                    "REQUIRED",
+                    Entity("NET", "net_in"),
+                    Json("""{"allowedViaTypes":["THROUGH"]}"""),
+                    scope: new ConstraintScope([new LayerId("layer_top_cu")], null, null, []))
+            ]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+
+        Assert.Contains(report.Evaluations, e => e.ConstraintId.Value == "via_type_net_in" && e.Status == ConstraintEvaluationStatus.Fail && e.AffectedEntities.Any(a => a.EntityId == "via_in"));
+        Assert.DoesNotContain(report.Evaluations, e => e.ConstraintId.Value == "via_type_net_in" && e.AffectedEntities.Any(a => a.EntityId == "via_gnd"));
+    }
+
+    [Fact]
+    public void Vertical_oval_pad_uses_vertical_capsule_not_circle()
+    {
+        var ovalPad = new Pad(new PadId("pad_1"), "1", null, null, new Point2(new LengthUnits(0), new LengthUnits(0)), AngleDegrees.Zero, "OVAL", new LengthUnits(1000), new LengthUnits(2000), null, "SMD", [new LayerId("layer_top_cu")], null, null, null);
+        var project = Project(footprints: [Footprint(ovalPad)], poses: [Pose("cmp_u1", 2000, 1500)]);
+
+        var pad = new PhysicalGeometryBuilder(_kernel).Build(project).Component(new ComponentId("cmp_u1"))!.Pads.Single().Objects.Single();
+
+        Assert.Equal(new GeometryEnvelope(1500, 500, 2500, 2500), pad.Geometry.Envelope);
+        Assert.True(_kernel.Contains(pad.Geometry, new GeometryPoint(2000, 2499)));
+        Assert.False(_kernel.Contains(pad.Geometry, new GeometryPoint(2999, 1500)));
+    }
+
+    [Fact]
+    public void Track_capsule_contains_round_caps_at_line_endpoints()
+    {
+        var model = new PhysicalGeometryBuilder(_kernel).Build(Project(routes: [Route("route_1", "net_in", Track("trk_1", "layer_top_cu", 100, 0, 0, 1000, 0))]));
+        var track = model.RouteObjects.Single(o => o.Id == "trk_1");
+
+        Assert.True(_kernel.Contains(track.Geometry, new GeometryPoint(-49, 0)));
+        Assert.True(_kernel.Contains(track.Geometry, new GeometryPoint(1049, 0)));
+        Assert.False(_kernel.Contains(track.Geometry, new GeometryPoint(-51, 0)));
+        Assert.False(_kernel.Contains(track.Geometry, new GeometryPoint(1051, 0)));
+    }
+
+    [Fact]
+    public void Blind_via_layer_span_does_not_collide_with_unspanned_layer_scope()
+    {
+        var layers = FourCopperLayers();
+        var via = Via("via_l1_l2", "net_in", "BLIND", "layer_l1_cu", "layer_l2_cu", 1000, 1000);
+        var track = Track("trk_l3", "layer_l3_cu", 250, 1000, 1000, 2000, 1000);
+        var project = Project(
+            boardLayers: layers,
+            vias: [via],
+            routes: [Route("route_l3", "net_gnd", track)],
+            constraints:
+            [
+                Constraint(
+                    "l3_clearance",
+                    "MinimumClearance",
+                    "REQUIRED",
+                    AllObjects(),
+                    Param(("minimumUnits", 500)),
+                    scope: new ConstraintScope([new LayerId("layer_l3_cu")], null, null, []))
+            ]);
+
+        var model = new PhysicalGeometryBuilder(_kernel).Build(project);
+        var viaObject = model.ViaObjects.Single();
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+
+        Assert.DoesNotContain(new LayerId("layer_l3_cu"), viaObject.LayerSpan!);
+        Assert.DoesNotContain(report.Evaluations, e => e.ConstraintId.Value == "l3_clearance" && e.Status == ConstraintEvaluationStatus.Fail && e.AffectedEntities.Any(a => a.EntityId == "via_l1_l2"));
+    }
+
+    [Fact]
+    public void Minimum_clearance_does_not_emit_duplicate_reverse_pairs()
+    {
+        var project = Project(routes:
+        [
+            Route("route_1", "net_in", Track("trk_1", "layer_top_cu", 250, 1000, 1000, 2000, 1000)),
+            Route("route_2", "net_gnd", Track("trk_2", "layer_top_cu", 250, 1000, 1200, 2000, 1200))
+        ]);
+
+        var report = new ConstraintEvaluationService(_kernel).Evaluate(project);
+        var clearanceFailures = report.Evaluations.Where(e => e.ConstraintId.Value == "mfg_min_clearance" && e.Status == ConstraintEvaluationStatus.Fail).ToArray();
+
+        Assert.Equal(clearanceFailures.Length, clearanceFailures.Select(e => e.AffectedEntities.Select(a => $"{a.EntityType}:{a.EntityId}").Order(StringComparer.Ordinal).Aggregate((a, b) => a + "|" + b)).Distinct().Count());
+    }
+
     private static CanonicalProject Project(
         IReadOnlyList<Component>? components = null,
+        IReadOnlyList<Footprint>? footprints = null,
         IReadOnlyList<Net>? nets = null,
         IReadOnlyList<ComponentPose>? poses = null,
         IReadOnlyList<ConstraintDefinition>? constraints = null,
         IReadOnlyList<Route>? routes = null,
         IReadOnlyList<Via>? vias = null,
         IReadOnlyList<Keepout>? keepouts = null,
+        IReadOnlyList<BoardLayer>? boardLayers = null,
         long manufacturingMinimumTraceWidth = 150,
         bool omitMinimumTraceWidth = false) =>
         new(
@@ -306,11 +449,11 @@ public sealed class Plan02GeometryConstraintTests
             [],
             new LogicalDesign(
                 components ?? [Component("cmp_u1", "U1", "fp_demo"), Component("cmp_u2", "U2", "fp_demo")],
-                [Footprint()],
+                footprints ?? [Footprint()],
                 nets ?? [Net("net_in", "IN"), Net("net_gnd", "GND")],
                 [],
                 []),
-            Board(keepouts),
+            Board(keepouts, boardLayers),
             Manufacturing(manufacturingMinimumTraceWidth, omitMinimumTraceWidth),
             constraints ?? [],
             new Semantics([]),
@@ -322,7 +465,7 @@ public sealed class Plan02GeometryConstraintTests
     private static Component Component(string id, string refdes, string? footprintId) =>
         new(new ComponentId(id), refdes, null, null, null, footprintId is null ? null : new FootprintId(footprintId), "MOVABLE", new Dictionary<string, SourcedValue>(), null, Json("{}"), Provenance.UserDefined);
 
-    private static Footprint Footprint() =>
+    private static Footprint Footprint(Pad? pad = null) =>
         new(
             new FootprintId("fp_demo"),
             "Demo footprint",
@@ -330,12 +473,12 @@ public sealed class Plan02GeometryConstraintTests
             Rect(-100, -100, 100, 100).ToPolygon2(),
             Rect(-150, -150, 150, 150).ToPolygon2(),
             null,
-            [new Pad(new PadId("pad_1"), "1", null, null, new Point2(new LengthUnits(100), new LengthUnits(0)), AngleDegrees.Zero, "RECT", new LengthUnits(10), new LengthUnits(10), null, "SMD", [new LayerId("layer_top_cu")], null, null, null)],
+            [pad ?? new Pad(new PadId("pad_1"), "1", null, null, new Point2(new LengthUnits(100), new LengthUnits(0)), AngleDegrees.Zero, "RECT", new LengthUnits(10), new LengthUnits(10), null, "SMD", [new LayerId("layer_top_cu")], null, null, null)],
             [],
             [],
             Provenance.UserDefined);
 
-    private static BoardDefinition Board(IReadOnlyList<Keepout>? keepouts = null) =>
+    private static BoardDefinition Board(IReadOnlyList<Keepout>? keepouts = null, IReadOnlyList<BoardLayer>? layers = null) =>
         new(
             new Point2(new LengthUnits(0), new LengthUnits(0)),
             Rect(0, 0, 5000, 3000).ToPolygon2(),
@@ -343,10 +486,24 @@ public sealed class Plan02GeometryConstraintTests
             [],
             null,
             null,
-            [new BoardLayer(new LayerId("layer_top_cu"), "Top copper", "COPPER_SIGNAL", 1, null, null, new Dictionary<string, SourcedValue>()), new BoardLayer(new LayerId("layer_bottom_cu"), "Bottom copper", "COPPER_SIGNAL", 2, null, null, new Dictionary<string, SourcedValue>())],
+            layers ?? TwoCopperLayers(),
             [],
             [],
             keepouts ?? []);
+
+    private static IReadOnlyList<BoardLayer> TwoCopperLayers() =>
+        [
+            new BoardLayer(new LayerId("layer_top_cu"), "Top copper", "COPPER_SIGNAL", 1, null, null, new Dictionary<string, SourcedValue>()),
+            new BoardLayer(new LayerId("layer_bottom_cu"), "Bottom copper", "COPPER_SIGNAL", 2, null, null, new Dictionary<string, SourcedValue>())
+        ];
+
+    private static IReadOnlyList<BoardLayer> FourCopperLayers() =>
+        [
+            new BoardLayer(new LayerId("layer_l1_cu"), "L1 copper", "COPPER_SIGNAL", 1, null, null, new Dictionary<string, SourcedValue>()),
+            new BoardLayer(new LayerId("layer_l2_cu"), "L2 copper", "COPPER_SIGNAL", 2, null, null, new Dictionary<string, SourcedValue>()),
+            new BoardLayer(new LayerId("layer_l3_cu"), "L3 copper", "COPPER_SIGNAL", 3, null, null, new Dictionary<string, SourcedValue>()),
+            new BoardLayer(new LayerId("layer_l4_cu"), "L4 copper", "COPPER_SIGNAL", 4, null, null, new Dictionary<string, SourcedValue>())
+        ];
 
     private static ManufacturingProfile Manufacturing(long minimumTraceWidth, bool omitMinimumTraceWidth) =>
         new(
@@ -397,8 +554,11 @@ public sealed class Plan02GeometryConstraintTests
     private static TrackSegment Track(string id, string layerId, long width, long x1, long y1, long x2, long y2) =>
         new(new TrackSegmentId(id), "LINE", new LayerId(layerId), new LengthUnits(width), new Point2(new LengthUnits(x1), new LengthUnits(y1)), new Point2(new LengthUnits(x2), new LengthUnits(y2)), null, null);
 
-    private static ConstraintDefinition Constraint(string id, string type, string enforcement, ConstraintSelector source, JsonElement parameters, ConstraintSelector? target = null) =>
-        new(new ConstraintId(id), type, source, target, parameters, enforcement, new ConstraintScope([], null, null, []), Provenance.UserDefined, null, true);
+    private static Via Via(string id, string netId, string viaType, string startLayer, string endLayer, long x = 1000, long y = 1000) =>
+        new(new ViaId(id), new NetId(netId), new Point2(new LengthUnits(x), new LengthUnits(y)), new LayerId(startLayer), new LayerId(endLayer), viaType, new LengthUnits(300), new LengthUnits(600), "REROUTABLE", Json("{}"));
+
+    private static ConstraintDefinition Constraint(string id, string type, string enforcement, ConstraintSelector source, JsonElement parameters, ConstraintSelector? target = null, ConstraintScope? scope = null) =>
+        new(new ConstraintId(id), type, source, target, parameters, enforcement, scope ?? new ConstraintScope([], null, null, []), Provenance.UserDefined, null, true);
 
     private static ConstraintSelector AllComponents() =>
         new("ALL", "COMPONENT", [], null);

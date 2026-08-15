@@ -24,7 +24,8 @@ public sealed record PhysicalObject(
     GeometryPolygon Geometry,
     LayerId? LayerId,
     NetId? NetId,
-    IReadOnlySet<string>? AppliesTo = null)
+    IReadOnlySet<string>? AppliesTo = null,
+    IReadOnlySet<LayerId>? LayerSpan = null)
 {
     public GeometryEnvelope Envelope => Geometry.Envelope;
 }
@@ -164,7 +165,8 @@ public sealed class PhysicalGeometryBuilder
         return Canon(pad.Shape) switch
         {
             "CIRCLE" => Ellipse(halfX, halfX),
-            "OVAL" => Capsule(new GeometryPoint(-Math.Max(0, halfX - halfY), 0), new GeometryPoint(Math.Max(0, halfX - halfY), 0), halfY),
+            "OVAL" when halfX >= halfY => Capsule(new GeometryPoint(-(halfX - halfY), 0), new GeometryPoint(halfX - halfY, 0), halfY),
+            "OVAL" => Capsule(new GeometryPoint(0, -(halfY - halfX)), new GeometryPoint(0, halfY - halfX), halfX),
             "ROUNDRECT" => RoundedRect(halfX, halfY, Math.Max(1, Math.Min(halfX, halfY) / 4)),
             "POLYGON" or "CUSTOM" when pad.CustomPolygon is not null => GeometryPolygon.From(pad.CustomPolygon),
             _ => Rect(-halfX, -halfY, halfX, halfY)
@@ -234,7 +236,7 @@ public sealed class PhysicalGeometryBuilder
         foreach (var via in project.PhysicalDesignState.Vias)
         {
             var radius = Math.Max(1, via.OuterDiameter.Value / 2);
-            yield return new PhysicalObject(via.Id.Value, "VIA", via.Id.Value, PhysicalObjectKind.Via, Circle(GeometryPoint.From(via.Position), radius), null, via.NetId);
+            yield return new PhysicalObject(via.Id.Value, "VIA", via.Id.Value, PhysicalObjectKind.Via, Circle(GeometryPoint.From(via.Position), radius), null, via.NetId, null, ViaLayerSpan(via, project.Board.Layers));
         }
     }
 
@@ -290,11 +292,11 @@ public sealed class PhysicalGeometryBuilder
 
         var nx = -dy / length;
         var ny = dx / length;
-        var startAngle = Math.Atan2(-ny, -nx);
-        var endAngle = Math.Atan2(ny, nx);
+        var normalAngle = Math.Atan2(ny, nx);
+        var oppositeNormalAngle = Math.Atan2(-ny, -nx);
         var points = new List<GeometryPoint>();
-        points.AddRange(ArcPoints(end, endAngle, endAngle + Math.PI, radius, capSegments));
-        points.AddRange(ArcPoints(start, startAngle, startAngle + Math.PI, radius, capSegments));
+        points.AddRange(ClockwiseArcPoints(end, normalAngle, oppositeNormalAngle, radius, capSegments));
+        points.AddRange(ClockwiseArcPoints(start, oppositeNormalAngle, normalAngle, radius, capSegments));
         return new GeometryPolygon(points, []);
     }
 
@@ -347,6 +349,21 @@ public sealed class PhysicalGeometryBuilder
         }
     }
 
+    private static IEnumerable<GeometryPoint> ClockwiseArcPoints(GeometryPoint center, double from, double to, long radius, int steps)
+    {
+        var sweep = to - from;
+        if (sweep > 0)
+        {
+            sweep -= Math.PI * 2;
+        }
+
+        for (var i = 0; i <= steps; i++)
+        {
+            var angle = from + sweep * i / steps;
+            yield return new GeometryPoint(center.X + (long)Math.Round(Math.Cos(angle) * radius), center.Y + (long)Math.Round(Math.Sin(angle) * radius));
+        }
+    }
+
     private static double Sweep(double start, double end, bool clockwise)
     {
         var sweep = end - start;
@@ -366,6 +383,23 @@ public sealed class PhysicalGeometryBuilder
         project.LogicalDesign.Nets
             .SelectMany(net => net.Endpoints.Where(e => e.PadId is not null).Select(e => (e.ComponentId.Value, e.PadId!.Value.Value, net.Id)))
             .ToDictionary(e => (e.Item1, e.Item2), e => e.Id);
+
+    private static IReadOnlySet<LayerId> ViaLayerSpan(Via via, IReadOnlyList<BoardLayer> layers)
+    {
+        var start = layers.FirstOrDefault(l => l.Id == via.StartLayerId);
+        var end = layers.FirstOrDefault(l => l.Id == via.EndLayerId);
+        if (start is null || end is null)
+        {
+            return new HashSet<LayerId> { via.StartLayerId, via.EndLayerId };
+        }
+
+        var minOrder = Math.Min(start.Order, end.Order);
+        var maxOrder = Math.Max(start.Order, end.Order);
+        return layers
+            .Where(l => l.IsCopperCapable && l.Order >= minOrder && l.Order <= maxOrder)
+            .Select(l => l.Id)
+            .ToHashSet();
+    }
 
     private static IReadOnlyDictionary<LayerId, LayerId> LayerMirror(IReadOnlyList<BoardLayer> layers)
     {

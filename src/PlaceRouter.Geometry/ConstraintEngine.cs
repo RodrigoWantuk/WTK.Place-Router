@@ -22,12 +22,234 @@ public sealed record EffectiveConstraintSet(
     IReadOnlyList<ConstraintConflict> Conflicts)
 {
     public EffectiveConstraint? EffectiveFor(EntityReference entity, string type, ConstraintSelectorResolver resolver) =>
-        Constraints
-            .Where(c => string.Equals(ConstraintSelectorResolver.Canon(c.Type), ConstraintSelectorResolver.Canon(type), StringComparison.Ordinal))
-            .Where(c => resolver.Resolve(c.Source).Any(r => SameEntity(r, entity)) || ConstraintSelectorResolver.Canon(c.Source.Kind) == "ALL")
+        EffectiveFor(entity, null, new ConstraintScope([], null, null, []), type, resolver);
+
+    public EffectiveConstraint? EffectiveFor(EntityReference source, EntityReference? target, ConstraintScope scope, string type, ConstraintSelectorResolver resolver) =>
+        Merge(
+            Constraints
+                .Where(c => string.Equals(ConstraintSelectorResolver.Canon(c.Type), ConstraintSelectorResolver.Canon(type), StringComparison.Ordinal))
+                .Where(c => Matches(c.Source, source, resolver))
+                .Where(c => c.Target is null || (target is not null && Matches(c.Target, target, resolver)))
+                .Where(c => ScopeApplies(c.Scope, scope))
+                .ToArray(),
+            source,
+            target,
+            scope,
+            type);
+
+    public IReadOnlyList<EffectiveConstraint> ConstraintsForEvaluation(CanonicalProject project, ConstraintSelectorResolver resolver)
+    {
+        var handled = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "MINIMUMTRACKWIDTH",
+            "MINIMUMWIDTH"
+        };
+        var result = Constraints
+            .Where(c => !handled.Contains(ConstraintSelectorResolver.Canon(c.Type)))
+            .ToList();
+
+        foreach (var route in project.PhysicalDesignState.Routes)
+        {
+            foreach (var track in route.TrackSegments)
+            {
+                var trackScope = new ConstraintScope([track.LayerId], null, null, ["TRACK"]);
+                var applicable = Constraints
+                    .Where(c => ConstraintSelectorResolver.Canon(c.Type) is "MINIMUMTRACKWIDTH" or "MINIMUMWIDTH")
+                    .Where(c => TrackMatches(c.Source, route, track, resolver))
+                    .Where(c => ScopeApplies(c.Scope, trackScope))
+                    .ToArray();
+                var merged = Merge(applicable, new EntityReference("TRACK_SEGMENT", track.Id.Value), null, trackScope, "MinimumTrackWidth");
+                if (merged is not null)
+                {
+                    result.Add(merged);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static EffectiveConstraint? Merge(IReadOnlyList<EffectiveConstraint> constraints, EntityReference source, EntityReference? target, ConstraintScope scope, string type)
+    {
+        if (constraints.Count == 0)
+        {
+            return null;
+        }
+
+        var canonType = ConstraintSelectorResolver.Canon(type);
+        if (canonType is "MINIMUMTRACKWIDTH" or "MINIMUMWIDTH" or "MINIMUMCLEARANCE" or "MINIMUMDRILL" or "MINIMUMVIADIAMETER" or "MINIMUMANNULARRING" or "MINIMUMCOMPONENTSPACING")
+        {
+            return MergeMinimum(constraints, source, target, scope, type, "minimumUnits", "widthUnits", "clearanceUnits", "drillDiameterUnits", "outerDiameterUnits", "annularRingUnits", "distanceUnits");
+        }
+
+        if (canonType is "MAXIMUMVIAS" or "MAXIMUMLENGTH")
+        {
+            return MergeMaximum(constraints, source, target, scope, type, "maximum", "maxVias", "maximumUnits", "maxLengthUnits", "lengthUnits");
+        }
+
+        if (canonType is "ALLOWEDROTATION" or "ALLOWEDROTATIONS")
+        {
+            return MergeAllowedNumbers(constraints, source, target, scope, type, "allowedDegrees");
+        }
+
+        if (canonType is "ALLOWEDSIDE")
+        {
+            return MergeAllowedStrings(constraints, source, target, scope, type, "allowedSides");
+        }
+
+        if (canonType is "ALLOWEDVIATYPES")
+        {
+            return MergeAllowedStrings(constraints, source, target, scope, type, "allowedViaTypes");
+        }
+
+        return constraints
             .OrderByDescending(c => c.Specificity)
             .ThenByDescending(c => c.Id.Value, StringComparer.Ordinal)
-            .FirstOrDefault();
+            .First();
+    }
+
+    private static EffectiveConstraint MergeMinimum(IReadOnlyList<EffectiveConstraint> constraints, EntityReference source, EntityReference? target, ConstraintScope scope, string type, params string[] names)
+    {
+        var required = constraints.Where(IsRequired).ToArray();
+        var candidates = required.Length == 0 ? constraints : required;
+        var unknown = candidates.FirstOrDefault(c => HasUnknownParameter(c.Parameters));
+        if (unknown is not null)
+        {
+            return Merged(unknown, source, target, scope, type, JsonDocument.Parse("""{"status":"UNKNOWN"}""").RootElement.Clone(), candidates);
+        }
+
+        var values = candidates
+            .Select(c => (Constraint: c, Value: LongParam(c.Parameters, names)))
+            .Where(v => v.Value is not null)
+            .ToArray();
+        if (values.Length == 0)
+        {
+            var winner = candidates.OrderByDescending(c => c.Specificity).First();
+            return Merged(winner, source, target, scope, type, JsonDocument.Parse("""{"status":"UNKNOWN"}""").RootElement.Clone(), candidates);
+        }
+
+        var selected = values.OrderByDescending(v => v.Value!.Value).ThenByDescending(v => v.Constraint.Specificity).First();
+        return Merged(selected.Constraint, source, target, scope, type, Param(names[0], selected.Value!.Value), candidates);
+    }
+
+    private static EffectiveConstraint MergeMaximum(IReadOnlyList<EffectiveConstraint> constraints, EntityReference source, EntityReference? target, ConstraintScope scope, string type, params string[] names)
+    {
+        var required = constraints.Where(IsRequired).ToArray();
+        var candidates = required.Length == 0 ? constraints : required;
+        var unknown = candidates.FirstOrDefault(c => HasUnknownParameter(c.Parameters));
+        if (unknown is not null)
+        {
+            return Merged(unknown, source, target, scope, type, JsonDocument.Parse("""{"status":"UNKNOWN"}""").RootElement.Clone(), candidates);
+        }
+
+        var values = candidates
+            .Select(c => (Constraint: c, Value: LongParam(c.Parameters, names)))
+            .Where(v => v.Value is not null)
+            .ToArray();
+        if (values.Length == 0)
+        {
+            var winner = candidates.OrderByDescending(c => c.Specificity).First();
+            return Merged(winner, source, target, scope, type, JsonDocument.Parse("""{"status":"UNKNOWN"}""").RootElement.Clone(), candidates);
+        }
+
+        var selected = values.OrderBy(v => v.Value!.Value).ThenByDescending(v => v.Constraint.Specificity).First();
+        return Merged(selected.Constraint, source, target, scope, type, Param(names[0], selected.Value!.Value), candidates);
+    }
+
+    private static EffectiveConstraint MergeAllowedNumbers(IReadOnlyList<EffectiveConstraint> constraints, EntityReference source, EntityReference? target, ConstraintScope scope, string type, string key)
+    {
+        var required = constraints.Where(IsRequired).ToArray();
+        var candidates = required.Length == 0 ? constraints : required;
+        var sets = candidates.Select(c => EffectiveConstraintResolver.NumericSet(c.Parameters, key, "rotations")).Where(s => s.Count > 0).ToArray();
+        var merged = sets.Length == 0 ? new HashSet<decimal>() : sets.Skip(1).Aggregate(sets[0], (current, next) => current.Intersect(next).ToHashSet());
+        var winner = candidates.OrderByDescending(c => c.Specificity).First();
+        return Merged(winner, source, target, scope, type, ParamArray(key, merged), candidates);
+    }
+
+    private static EffectiveConstraint MergeAllowedStrings(IReadOnlyList<EffectiveConstraint> constraints, EntityReference source, EntityReference? target, ConstraintScope scope, string type, string key)
+    {
+        var required = constraints.Where(IsRequired).ToArray();
+        var candidates = required.Length == 0 ? constraints : required;
+        var sets = candidates.Select(c => EffectiveConstraintResolver.StringSet(c.Parameters, key, "sides", "side", "viaTypes")).Where(s => s.Count > 0).ToArray();
+        var merged = sets.Length == 0 ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : sets.Skip(1).Aggregate(sets[0], (current, next) => current.Intersect(next, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase));
+        var winner = candidates.OrderByDescending(c => c.Specificity).First();
+        return Merged(winner, source, target, scope, type, ParamArray(key, merged), candidates);
+    }
+
+    private static EffectiveConstraint Merged(EffectiveConstraint winner, EntityReference source, EntityReference? target, ConstraintScope scope, string type, JsonElement parameters, IReadOnlyList<EffectiveConstraint> mergedFrom) =>
+        new(
+            winner.Id,
+            type,
+            new ConstraintSelector("ENTITY", source.EntityType, [source.EntityId], null),
+            target is null ? null : new ConstraintSelector("ENTITY", target.EntityType, [target.EntityId], null),
+            parameters,
+            mergedFrom.Any(IsRequired) ? "REQUIRED" : winner.Enforcement,
+            scope,
+            winner.Provenance,
+            string.Join("+", mergedFrom.Select(c => c.Id.Value).Order(StringComparer.Ordinal)),
+            mergedFrom.Max(c => c.Specificity));
+
+    private static bool Matches(ConstraintSelector selector, EntityReference entity, ConstraintSelectorResolver resolver) =>
+        ConstraintSelectorResolver.Canon(selector.Kind) == "ALL" ||
+        resolver.Resolve(selector).Any(r => SameEntity(r, entity));
+
+    private static bool TrackMatches(ConstraintSelector selector, Route route, TrackSegment track, ConstraintSelectorResolver resolver)
+    {
+        if (ConstraintSelectorResolver.Canon(selector.Kind) == "ALL")
+        {
+            return true;
+        }
+
+        var refs = resolver.Resolve(selector);
+        return refs.Any(r =>
+            SameEntity(r, new EntityReference("TRACK_SEGMENT", track.Id.Value)) ||
+            SameEntity(r, new EntityReference("ROUTE", route.Id.Value)) ||
+            SameEntity(r, new EntityReference("NET", route.NetId.Value)));
+    }
+
+    private static bool ScopeApplies(ConstraintScope constraintScope, ConstraintScope requestedScope)
+    {
+        var constraintLayers = constraintScope.LayerIds.Select(l => l.Value).ToHashSet(StringComparer.Ordinal);
+        var requestedLayers = requestedScope.LayerIds.Select(l => l.Value).ToHashSet(StringComparer.Ordinal);
+        if (constraintLayers.Count > 0 && requestedLayers.Count > 0 && !constraintLayers.Overlaps(requestedLayers))
+        {
+            return false;
+        }
+
+        var constraintTypes = constraintScope.GeometryTypes.Select(ConstraintSelectorResolver.Canon).ToHashSet(StringComparer.Ordinal);
+        var requestedTypes = requestedScope.GeometryTypes.Select(ConstraintSelectorResolver.Canon).ToHashSet(StringComparer.Ordinal);
+        return constraintTypes.Count == 0 || requestedTypes.Count == 0 || constraintTypes.Overlaps(requestedTypes);
+    }
+
+    private static bool IsRequired(EffectiveConstraint constraint) =>
+        string.Equals(constraint.Enforcement, "REQUIRED", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasUnknownParameter(JsonElement parameters) =>
+        parameters.TryGetProperty("status", out var status) &&
+        status.ValueKind == JsonValueKind.String &&
+        string.Equals(status.GetString(), "UNKNOWN", StringComparison.OrdinalIgnoreCase);
+
+    private static long? LongParam(JsonElement parameters, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (parameters.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
+            {
+                return number;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonElement Param(string key, long value) =>
+        JsonDocument.Parse($$"""{"{{key}}":{{value}}}""").RootElement.Clone();
+
+    private static JsonElement ParamArray(string key, IEnumerable<decimal> values) =>
+        JsonDocument.Parse($$"""{"{{key}}":[{{string.Join(",", values)}}]}""").RootElement.Clone();
+
+    private static JsonElement ParamArray(string key, IEnumerable<string> values) =>
+        JsonDocument.Parse($$"""{"{{key}}":[{{string.Join(",", values.Select(v => "\"" + v + "\""))}}]}""").RootElement.Clone();
 
     private static bool SameEntity(EntityReference left, EntityReference right) =>
         string.Equals(ConstraintSelectorResolver.Canon(left.EntityType), ConstraintSelectorResolver.Canon(right.EntityType), StringComparison.Ordinal) &&
@@ -119,7 +341,7 @@ public sealed class EffectiveConstraintResolver
         constraints.AddRange(ManufacturingConstraints(project, manufacturingRules));
         constraints.AddRange(project.Constraints.Where(c => c.Enabled).Select(c => new EffectiveConstraint(c.Id, c.Type, c.Source, c.Target, c.Parameters, c.Enforcement, c.Scope, c.Provenance, c.Provenance.Kind, Specificity(c.Source) + (c.Target is null ? 0 : Specificity(c.Target)))));
 
-        return new EffectiveConstraintSet(constraints, DetectConflicts(constraints));
+        return new EffectiveConstraintSet(constraints, DetectConflicts(constraints, new ConstraintSelectorResolver(project)));
     }
 
     private static IEnumerable<EffectiveConstraint> ManufacturingConstraints(CanonicalProject project, ManufacturingRules rules)
@@ -140,13 +362,13 @@ public sealed class EffectiveConstraintResolver
             new(new ConstraintId(id), type, source, null, parameters, "REQUIRED", scope, provenance, "ManufacturingProfile", 1);
     }
 
-    private static IReadOnlyList<ConstraintConflict> DetectConflicts(IReadOnlyList<EffectiveConstraint> constraints)
+    private static IReadOnlyList<ConstraintConflict> DetectConflicts(IReadOnlyList<EffectiveConstraint> constraints, ConstraintSelectorResolver resolver)
     {
         var conflicts = new List<ConstraintConflict>();
         var required = constraints.Where(c => string.Equals(c.Enforcement, "REQUIRED", StringComparison.OrdinalIgnoreCase)).ToArray();
         foreach (var pair in required.SelectMany((a, i) => required.Skip(i + 1).Select(b => (a, b))))
         {
-            if (!SameSelector(pair.a.Source, pair.b.Source))
+            if (!SelectorsOverlap(pair.a.Source, pair.b.Source, resolver) || !ScopesOverlap(pair.a.Scope, pair.b.Scope))
             {
                 continue;
             }
@@ -176,15 +398,48 @@ public sealed class EffectiveConstraintResolver
                     conflicts.Add(new ConstraintConflict(pair.a.Id, pair.b.Id, "Required allowed side constraints have no common value.", ConstraintEvidence.From(("left", string.Join(",", left)), ("right", string.Join(",", right)))));
                 }
             }
+
+            if (type == "ALLOWEDVIATYPES")
+            {
+                var left = StringSet(pair.a.Parameters, "allowedViaTypes", "viaTypes");
+                var right = StringSet(pair.b.Parameters, "allowedViaTypes", "viaTypes");
+                if (left.Count > 0 && right.Count > 0 && !left.Intersect(right, StringComparer.OrdinalIgnoreCase).Any())
+                {
+                    conflicts.Add(new ConstraintConflict(pair.a.Id, pair.b.Id, "Required allowed via type constraints have no common value.", ConstraintEvidence.From(("left", string.Join(",", left)), ("right", string.Join(",", right)))));
+                }
+            }
         }
 
         return conflicts;
     }
 
-    private static bool SameSelector(ConstraintSelector left, ConstraintSelector right) =>
-        string.Equals(left.Kind, right.Kind, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(left.EntityType, right.EntityType, StringComparison.OrdinalIgnoreCase) &&
-        left.EntityIds.Order(StringComparer.Ordinal).SequenceEqual(right.EntityIds.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+    private static bool SelectorsOverlap(ConstraintSelector left, ConstraintSelector right, ConstraintSelectorResolver resolver)
+    {
+        if (ConstraintSelectorResolver.Canon(left.Kind) == "ALL" || ConstraintSelectorResolver.Canon(right.Kind) == "ALL")
+        {
+            return true;
+        }
+
+        var leftRefs = resolver.Resolve(left);
+        var rightRefs = resolver.Resolve(right);
+        return leftRefs.Any(l => rightRefs.Any(r =>
+            string.Equals(ConstraintSelectorResolver.Canon(l.EntityType), ConstraintSelectorResolver.Canon(r.EntityType), StringComparison.Ordinal) &&
+            string.Equals(l.EntityId, r.EntityId, StringComparison.Ordinal)));
+    }
+
+    private static bool ScopesOverlap(ConstraintScope left, ConstraintScope right)
+    {
+        var leftLayers = left.LayerIds.Select(l => l.Value).ToHashSet(StringComparer.Ordinal);
+        var rightLayers = right.LayerIds.Select(l => l.Value).ToHashSet(StringComparer.Ordinal);
+        if (leftLayers.Count > 0 && rightLayers.Count > 0 && !leftLayers.Overlaps(rightLayers))
+        {
+            return false;
+        }
+
+        var leftTypes = left.GeometryTypes.Select(ConstraintSelectorResolver.Canon).ToHashSet(StringComparer.Ordinal);
+        var rightTypes = right.GeometryTypes.Select(ConstraintSelectorResolver.Canon).ToHashSet(StringComparer.Ordinal);
+        return leftTypes.Count == 0 || rightTypes.Count == 0 || leftTypes.Overlaps(rightTypes);
+    }
 
     private static int Specificity(ConstraintSelector selector) =>
         ConstraintSelectorResolver.Canon(selector.Kind) switch
@@ -282,7 +537,7 @@ public sealed class ConstraintEvaluationService
         var rules = ManufacturingRuleResolver.Resolve(project.ManufacturingProfile);
         var effectiveSet = _resolver.Resolve(project, rules);
         var resolver = new ConstraintSelectorResolver(project);
-        var evaluations = effectiveSet.Constraints.SelectMany(c => EvaluateConstraint(project, geometry, resolver, c, rules)).ToArray();
+        var evaluations = effectiveSet.ConstraintsForEvaluation(project, resolver).SelectMany(c => EvaluateConstraint(project, geometry, resolver, c, rules)).ToArray();
         var readiness = WithRequiredUnknowns(_readinessAnalyzer.Analyze(project, geometry), evaluations);
         var findings = Findings(evaluations, effectiveSet.Conflicts).ToArray();
         return new ConstraintEvaluationReport(evaluations, effectiveSet.Conflicts, readiness, findings);
@@ -306,10 +561,10 @@ public sealed class ConstraintEvaluationService
             "MINIMUMTRACKWIDTH" or "MINIMUMWIDTH" => MinimumTrackWidth(project, resolver, constraint, rules.MinimumTrackWidth.Value),
             "MINIMUMCLEARANCE" => MinimumClearance(geometry, resolver, constraint, rules.MinimumClearance.Value),
             "COPPERTOEDGE" => CopperToEdge(geometry, resolver, constraint, rules.CopperToEdge.Value),
-            "MINIMUMDRILL" => MinimumDrill(project, constraint, rules.MinimumDrill.Value),
-            "MINIMUMVIADIAMETER" => MinimumViaDiameter(project, constraint, rules.MinimumViaDiameter.Value),
-            "MINIMUMANNULARRING" => MinimumAnnularRing(project, constraint, rules.AnnularRing.Value),
-            "ALLOWEDVIATYPES" => AllowedViaTypes(project, constraint, rules.AllowedViaTypes.Values),
+            "MINIMUMDRILL" => MinimumDrill(project, resolver, constraint, rules.MinimumDrill.Value),
+            "MINIMUMVIADIAMETER" => MinimumViaDiameter(project, resolver, constraint, rules.MinimumViaDiameter.Value),
+            "MINIMUMANNULARRING" => MinimumAnnularRing(project, resolver, constraint, rules.AnnularRing.Value),
+            "ALLOWEDVIATYPES" => AllowedViaTypes(project, resolver, constraint, rules.AllowedViaTypes.Values),
             "LAYERCOMPATIBILITY" => LayerCompatibility(project, constraint, rules.AllowedLayerCounts.Values),
             "MAXIMUMVIAS" => MaximumVias(project, resolver, constraint),
             "MAXIMUMLENGTH" => MaximumLength(project, resolver, constraint),
@@ -552,11 +807,17 @@ public sealed class ConstraintEvaluationService
         var source = CopperObjects(geometry, resolver.Resolve(constraint.Source), constraint.Source, constraint.Scope).ToArray();
         var target = constraint.Target is null ? CopperObjects(geometry, [], new ConstraintSelector("ALL", null, [], null), constraint.Scope).ToArray() : CopperObjects(geometry, resolver.Resolve(constraint.Target), constraint.Target, constraint.Scope).ToArray();
         var any = false;
+        var seenPairs = new HashSet<string>(StringComparer.Ordinal);
         foreach (var a in source)
         {
             foreach (var b in target)
             {
                 if (ReferenceEquals(a, b) || a.Id == b.Id || a.NetId == b.NetId || !SameLayer(a, b))
+                {
+                    continue;
+                }
+
+                if (!seenPairs.Add(PairKey(a, b)))
                 {
                     continue;
                 }
@@ -612,10 +873,17 @@ public sealed class ConstraintEvaluationService
         }
     }
 
-    private IEnumerable<ConstraintEvaluation> MinimumDrill(CanonicalProject project, EffectiveConstraint constraint, LengthUnits? fallback)
+    private IEnumerable<ConstraintEvaluation> MinimumDrill(CanonicalProject project, ConstraintSelectorResolver resolver, EffectiveConstraint constraint, LengthUnits? fallback)
     {
         var required = LengthParam(constraint.Parameters, fallback, "minimumUnits", "drillDiameterUnits");
-        foreach (var via in project.PhysicalDesignState.Vias)
+        var vias = SelectedVias(project, resolver, constraint).ToArray();
+        if (vias.Length == 0)
+        {
+            yield return EmptySelectionResult(constraint);
+            yield break;
+        }
+
+        foreach (var via in vias)
         {
             if (required is null)
             {
@@ -627,10 +895,17 @@ public sealed class ConstraintEvaluationService
         }
     }
 
-    private IEnumerable<ConstraintEvaluation> MinimumViaDiameter(CanonicalProject project, EffectiveConstraint constraint, LengthUnits? fallback)
+    private IEnumerable<ConstraintEvaluation> MinimumViaDiameter(CanonicalProject project, ConstraintSelectorResolver resolver, EffectiveConstraint constraint, LengthUnits? fallback)
     {
         var required = LengthParam(constraint.Parameters, fallback, "minimumUnits", "outerDiameterUnits");
-        foreach (var via in project.PhysicalDesignState.Vias)
+        var vias = SelectedVias(project, resolver, constraint).ToArray();
+        if (vias.Length == 0)
+        {
+            yield return EmptySelectionResult(constraint);
+            yield break;
+        }
+
+        foreach (var via in vias)
         {
             if (required is null)
             {
@@ -642,10 +917,17 @@ public sealed class ConstraintEvaluationService
         }
     }
 
-    private IEnumerable<ConstraintEvaluation> MinimumAnnularRing(CanonicalProject project, EffectiveConstraint constraint, LengthUnits? fallback)
+    private IEnumerable<ConstraintEvaluation> MinimumAnnularRing(CanonicalProject project, ConstraintSelectorResolver resolver, EffectiveConstraint constraint, LengthUnits? fallback)
     {
         var required = LengthParam(constraint.Parameters, fallback, "minimumUnits", "annularRingUnits");
-        foreach (var via in project.PhysicalDesignState.Vias)
+        var vias = SelectedVias(project, resolver, constraint).ToArray();
+        if (vias.Length == 0)
+        {
+            yield return EmptySelectionResult(constraint);
+            yield break;
+        }
+
+        foreach (var via in vias)
         {
             var actual = new LengthUnits(Math.Max(0, (via.OuterDiameter.Value - via.DrillDiameter.Value) / 2));
             if (required is null)
@@ -658,7 +940,7 @@ public sealed class ConstraintEvaluationService
         }
     }
 
-    private IEnumerable<ConstraintEvaluation> AllowedViaTypes(CanonicalProject project, EffectiveConstraint constraint, IReadOnlySet<string>? fallback)
+    private IEnumerable<ConstraintEvaluation> AllowedViaTypes(CanonicalProject project, ConstraintSelectorResolver resolver, EffectiveConstraint constraint, IReadOnlySet<string>? fallback)
     {
         var allowed = EffectiveConstraintResolver.StringSet(constraint.Parameters, "allowedViaTypes", "viaTypes");
         if (allowed.Count == 0 && fallback is not null)
@@ -666,7 +948,14 @@ public sealed class ConstraintEvaluationService
             allowed = fallback;
         }
 
-        foreach (var via in project.PhysicalDesignState.Vias)
+        var vias = SelectedVias(project, resolver, constraint).ToArray();
+        if (vias.Length == 0)
+        {
+            yield return EmptySelectionResult(constraint);
+            yield break;
+        }
+
+        foreach (var via in vias)
         {
             if (allowed.Count == 0)
             {
@@ -707,9 +996,14 @@ public sealed class ConstraintEvaluationService
             yield break;
         }
 
-        var refs = resolver.Resolve(constraint.Source);
-        var netIds = refs.Where(r => ConstraintSelectorResolver.Canon(r.EntityType) == "NET").Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
-        foreach (var route in project.PhysicalDesignState.Routes.Where(r => netIds.Count == 0 || netIds.Contains(r.NetId.Value)))
+        var routes = SelectedRoutes(project, resolver, constraint).ToArray();
+        if (routes.Length == 0)
+        {
+            yield return EmptySelectionResult(constraint);
+            yield break;
+        }
+
+        foreach (var route in routes)
         {
             var actual = route.ViaIds.Count;
             yield return Result(constraint, actual <= max.Value ? ConstraintEvaluationStatus.Pass : ConstraintEvaluationStatus.Fail, [new EntityReference("ROUTE", route.Id.Value), new EntityReference("NET", route.NetId.Value)], new LengthUnits(max.Value), new LengthUnits(actual), ConstraintEvidence.From(("viaCount", actual)), actual <= max.Value ? null : "Route uses too many vias.");
@@ -725,9 +1019,14 @@ public sealed class ConstraintEvaluationService
             yield break;
         }
 
-        var refs = resolver.Resolve(constraint.Source);
-        var netIds = refs.Where(r => ConstraintSelectorResolver.Canon(r.EntityType) == "NET").Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
-        foreach (var route in project.PhysicalDesignState.Routes.Where(r => netIds.Count == 0 || netIds.Contains(r.NetId.Value)))
+        var routes = SelectedRoutes(project, resolver, constraint).ToArray();
+        if (routes.Length == 0)
+        {
+            yield return EmptySelectionResult(constraint);
+            yield break;
+        }
+
+        foreach (var route in routes)
         {
             var actual = route.TrackSegments.Sum(TrackLength);
             yield return Result(constraint, actual <= max.Value ? ConstraintEvaluationStatus.Pass : ConstraintEvaluationStatus.Fail, [new EntityReference("ROUTE", route.Id.Value), new EntityReference("NET", route.NetId.Value)], new LengthUnits(max.Value), new LengthUnits(actual), ConstraintEvidence.From(("lengthUnits", actual)), actual <= max.Value ? null : "Route length exceeds maximum.");
@@ -761,6 +1060,70 @@ public sealed class ConstraintEvaluationService
             .Where(t => trackIds.Count == 0 || trackIds.Contains(t.Id.Value));
     }
 
+    private static IEnumerable<Route> SelectedRoutes(CanonicalProject project, ConstraintSelectorResolver resolver, EffectiveConstraint constraint)
+    {
+        if (ConstraintSelectorResolver.Canon(constraint.Source.Kind) == "ALL")
+        {
+            return project.PhysicalDesignState.Routes;
+        }
+
+        var refs = resolver.Resolve(constraint.Source);
+        var routeIds = refs.Where(r => ConstraintSelectorResolver.Canon(r.EntityType) == "ROUTE").Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
+        var netIds = refs.Where(r => ConstraintSelectorResolver.Canon(r.EntityType) == "NET").Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
+        if (routeIds.Count == 0 && netIds.Count == 0)
+        {
+            return [];
+        }
+
+        return project.PhysicalDesignState.Routes
+            .Where(r => routeIds.Contains(r.Id.Value) || netIds.Contains(r.NetId.Value));
+    }
+
+    private static IEnumerable<Via> SelectedVias(CanonicalProject project, ConstraintSelectorResolver resolver, EffectiveConstraint constraint)
+    {
+        var selected = ConstraintSelectorResolver.Canon(constraint.Source.Kind) == "ALL"
+            ? project.PhysicalDesignState.Vias
+            : SelectedViasByRefs(project, resolver.Resolve(constraint.Source));
+
+        return selected.Where(v => ViaInScope(v, project.Board.Layers, constraint.Scope));
+    }
+
+    private static IEnumerable<Via> SelectedViasByRefs(CanonicalProject project, IReadOnlyList<EntityReference> refs)
+    {
+        var viaIds = refs.Where(r => ConstraintSelectorResolver.Canon(r.EntityType) == "VIA").Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
+        var netIds = refs.Where(r => ConstraintSelectorResolver.Canon(r.EntityType) == "NET").Select(r => r.EntityId).ToHashSet(StringComparer.Ordinal);
+        if (viaIds.Count == 0 && netIds.Count == 0)
+        {
+            return [];
+        }
+
+        return project.PhysicalDesignState.Vias
+            .Where(v => viaIds.Contains(v.Id.Value) || netIds.Contains(v.NetId.Value));
+    }
+
+    private static bool ViaInScope(Via via, IReadOnlyList<BoardLayer> layers, ConstraintScope scope)
+    {
+        var requestedLayers = scope.LayerIds.Select(l => l.Value).ToHashSet(StringComparer.Ordinal);
+        return requestedLayers.Count == 0 || ViaLayerSpan(via, layers).Any(l => requestedLayers.Contains(l.Value));
+    }
+
+    private static IReadOnlySet<LayerId> ViaLayerSpan(Via via, IReadOnlyList<BoardLayer> layers)
+    {
+        var start = layers.FirstOrDefault(l => l.Id == via.StartLayerId);
+        var end = layers.FirstOrDefault(l => l.Id == via.EndLayerId);
+        if (start is null || end is null)
+        {
+            return new HashSet<LayerId> { via.StartLayerId, via.EndLayerId };
+        }
+
+        var minOrder = Math.Min(start.Order, end.Order);
+        var maxOrder = Math.Max(start.Order, end.Order);
+        return layers
+            .Where(l => l.IsCopperCapable && l.Order >= minOrder && l.Order <= maxOrder)
+            .Select(l => l.Id)
+            .ToHashSet();
+    }
+
     private static IEnumerable<PhysicalObject> PhysicalObjects(PhysicalGeometryModel geometry, IReadOnlyList<EntityReference> refs, ConstraintSelector selector, ConstraintScope scope)
     {
         var all = geometry.Components.SelectMany(c => c.Objects)
@@ -787,12 +1150,39 @@ public sealed class ConstraintEvaluationService
         var layers = scope.LayerIds.Select(l => l.Value).ToHashSet(StringComparer.Ordinal);
         var kinds = scope.GeometryTypes.Select(ConstraintSelectorResolver.Canon).ToHashSet(StringComparer.Ordinal);
         return objects
-            .Where(o => layers.Count == 0 || o.LayerId is null || layers.Contains(o.LayerId.Value.Value))
+            .Where(o => layers.Count == 0 || ObjectLayerIds(o).Any(layers.Contains))
             .Where(o => kinds.Count == 0 || kinds.Contains(ConstraintSelectorResolver.Canon(o.Kind.ToString())));
     }
 
-    private static bool SameLayer(PhysicalObject first, PhysicalObject second) =>
-        first.LayerId is null || second.LayerId is null || first.LayerId == second.LayerId;
+    private static bool SameLayer(PhysicalObject first, PhysicalObject second)
+    {
+        var firstLayers = ObjectLayerIds(first).ToHashSet(StringComparer.Ordinal);
+        var secondLayers = ObjectLayerIds(second).ToHashSet(StringComparer.Ordinal);
+        return firstLayers.Count == 0 || secondLayers.Count == 0 || firstLayers.Overlaps(secondLayers);
+    }
+
+    private static IEnumerable<string> ObjectLayerIds(PhysicalObject obj)
+    {
+        if (obj.LayerId is not null)
+        {
+            yield return obj.LayerId.Value.Value;
+        }
+
+        if (obj.LayerSpan is not null)
+        {
+            foreach (var layer in obj.LayerSpan)
+            {
+                yield return layer.Value;
+            }
+        }
+    }
+
+    private static string PairKey(PhysicalObject first, PhysicalObject second)
+    {
+        var keys = new[] { $"{first.EntityType}:{first.EntityId}:{first.Id}", $"{second.EntityType}:{second.EntityId}:{second.Id}" }
+            .Order(StringComparer.Ordinal);
+        return string.Join("|", keys);
+    }
 
     private static bool AppliesTo(PhysicalObject keepout, PhysicalObjectKind kind)
     {
@@ -815,6 +1205,11 @@ public sealed class ConstraintEvaluationService
 
     private ConstraintEvaluation UnknownSelector(EffectiveConstraint constraint) =>
         Result(constraint, ConstraintEvaluationStatus.Unknown, [new EntityReference("CONSTRAINT", constraint.Id.Value)], null, null, ConstraintEvidence.From(("missing", "selector target")), "Constraint selector resolved no target.");
+
+    private ConstraintEvaluation EmptySelectionResult(EffectiveConstraint constraint) =>
+        ConstraintSelectorResolver.Canon(constraint.Source.Kind) == "ALL"
+            ? Result(constraint, ConstraintEvaluationStatus.NotApplicable, [], null, null, ConstraintEvidence.Empty, null)
+            : UnknownSelector(constraint);
 
     private ConstraintEvaluation UnknownGeometry(EffectiveConstraint constraint, string entityType, string entityId, string message) =>
         Result(constraint, ConstraintEvaluationStatus.Unknown, [new EntityReference(entityType, entityId)], null, null, ConstraintEvidence.From(("missing", "geometry")), message);
