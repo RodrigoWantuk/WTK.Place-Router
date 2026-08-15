@@ -41,7 +41,7 @@ public sealed record ConstraintEvaluation(
     string? Message)
 {
     public bool BlocksCandidate =>
-        Status == ConstraintEvaluationStatus.Fail &&
+        Status is ConstraintEvaluationStatus.Fail or ConstraintEvaluationStatus.Unknown &&
         string.Equals(Enforcement, "REQUIRED", StringComparison.OrdinalIgnoreCase);
 }
 

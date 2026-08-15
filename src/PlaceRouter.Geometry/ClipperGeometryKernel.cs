@@ -53,6 +53,7 @@ public sealed class ClipperGeometryKernel : IGeometryKernel
         !container.IsEmpty &&
         !candidate.IsEmpty &&
         candidate.Outer.All(p => Contains(container, p)) &&
+        container.Holes.All(hole => !hole.Any(p => PointInRing(p, candidate.Outer))) &&
         !IntersectsAnyEdge(container, candidate);
 
     public LengthUnits Distance(GeometryPolygon first, GeometryPolygon second)
@@ -87,7 +88,7 @@ public sealed class ClipperGeometryKernel : IGeometryKernel
         }
 
         var inflated = Clipper.InflatePaths(ToPaths(polygon), delta.Value, JoinType.Miter, EndType.Polygon);
-        return inflated.Select(FromPath).Where(p => !p.IsEmpty).ToArray();
+        return FromPaths(inflated);
     }
 
     public bool SegmentIntersectsPolygon(GeometrySegment segment, GeometryPolygon polygon) =>
@@ -130,15 +131,22 @@ public sealed class ClipperGeometryKernel : IGeometryKernel
 
     private static Paths64 ToPaths(GeometryPolygon polygon)
     {
-        var paths = new Paths64 { ToPath(polygon.Outer) };
-        paths.AddRange(polygon.Holes.Select(ToPath));
+        var paths = new Paths64 { ToPath(polygon.Outer, positive: true) };
+        paths.AddRange(polygon.Holes.Select(h => ToPath(h, positive: false)));
         return paths;
     }
 
-    private static Path64 ToPath(IReadOnlyList<GeometryPoint> points)
+    private static Path64 ToPath(IReadOnlyList<GeometryPoint> points, bool positive)
     {
-        var path = new Path64(points.Count);
-        foreach (var point in points)
+        var oriented = points;
+        var area = SignedArea(points);
+        if ((positive && area < 0) || (!positive && area > 0))
+        {
+            oriented = points.Reverse().ToArray();
+        }
+
+        var path = new Path64(oriented.Count);
+        foreach (var point in oriented)
         {
             path.Add(new Point64(point.X, point.Y));
         }
@@ -146,10 +154,47 @@ public sealed class ClipperGeometryKernel : IGeometryKernel
         return path;
     }
 
-    private static GeometryPolygon FromPath(Path64 path) =>
-        new(path.Select(p => new GeometryPoint(p.X, p.Y)).ToArray(), []);
+    private static IReadOnlyList<GeometryPolygon> FromPaths(Paths64 paths)
+    {
+        var outers = new List<Path64>();
+        var holes = new List<Path64>();
+        foreach (var path in paths.Where(p => p.Count >= 3 && Math.Abs(SignedArea(p)) > 0))
+        {
+            if (SignedArea(path) >= 0)
+            {
+                outers.Add(path);
+            }
+            else
+            {
+                holes.Add(path);
+            }
+        }
+
+        return outers
+            .Select(outer => new GeometryPolygon(
+                outer.Select(p => new GeometryPoint(p.X, p.Y)).ToArray(),
+                holes
+                    .Where(hole => hole.Any(p => PointInRing(new GeometryPoint(p.X, p.Y), outer.Select(o => new GeometryPoint(o.X, o.Y)).ToArray())))
+                    .Select(hole => (IReadOnlyList<GeometryPoint>)hole.Select(p => new GeometryPoint(p.X, p.Y)).ToArray())
+                    .ToArray()))
+            .Where(p => !p.IsEmpty)
+            .ToArray();
+    }
 
     private static long SignedArea(Path64 path)
+    {
+        long sum = 0;
+        for (var i = 0; i < path.Count; i++)
+        {
+            var a = path[i];
+            var b = path[(i + 1) % path.Count];
+            sum += (a.X * b.Y) - (b.X * a.Y);
+        }
+
+        return sum;
+    }
+
+    private static long SignedArea(IReadOnlyList<GeometryPoint> path)
     {
         long sum = 0;
         for (var i = 0; i < path.Count; i++)

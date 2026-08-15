@@ -23,7 +23,8 @@ public sealed record PhysicalObject(
     PhysicalObjectKind Kind,
     GeometryPolygon Geometry,
     LayerId? LayerId,
-    NetId? NetId)
+    NetId? NetId,
+    IReadOnlySet<string>? AppliesTo = null)
 {
     public GeometryEnvelope Envelope => Geometry.Envelope;
 }
@@ -94,8 +95,10 @@ public sealed class PhysicalGeometryBuilder
 
     public PhysicalGeometryModel Build(CanonicalProject project)
     {
+        var netByPad = NetByPad(project);
+        var layerMirror = LayerMirror(project.Board.Layers);
         var components = project.PhysicalDesignState.ComponentPoses
-            .Select(pose => BuildComponent(project, pose))
+            .Select(pose => BuildComponent(project, pose, netByPad, layerMirror))
             .Where(c => c is not null)
             .Cast<ComponentGeometry>()
             .ToArray();
@@ -104,13 +107,13 @@ public sealed class PhysicalGeometryBuilder
             components,
             BuildBoard(project).ToArray(),
             project.Board.Regions.Select(r => new PhysicalObject(r.Id.Value, "REGION", r.Id.Value, PhysicalObjectKind.Region, GeometryPolygon.From(r.Geometry), null, null)).ToArray(),
-            project.Board.Keepouts.Select(k => new PhysicalObject(k.Id.Value, "KEEPOUT", k.Id.Value, PhysicalObjectKind.Keepout, GeometryPolygon.From(k.Geometry), null, null)).ToArray(),
+            BuildKeepouts(project).ToArray(),
             BuildRoutes(project).ToArray(),
             BuildVias(project).ToArray(),
             BuildCopperZones(project).ToArray());
     }
 
-    private ComponentGeometry? BuildComponent(CanonicalProject project, ComponentPose pose)
+    private ComponentGeometry? BuildComponent(CanonicalProject project, ComponentPose pose, IReadOnlyDictionary<(string ComponentId, string PadId), NetId> netByPad, IReadOnlyDictionary<LayerId, LayerId> layerMirror)
     {
         var component = project.LogicalDesign.Components.FirstOrDefault(c => c.Id == pose.ComponentId);
         if (component?.FootprintId is null)
@@ -132,11 +135,11 @@ public sealed class PhysicalGeometryBuilder
             ? null
             : new PhysicalObject($"{component.Id.Value}:courtyard", "COMPONENT", component.Id.Value, PhysicalObjectKind.ComponentCourtyard, _kernel.TransformPolygon(GeometryPolygon.From(footprint.Courtyard), transform), null, null);
 
-        var pads = footprint.Pads.Select(pad => BuildPad(component, pose, pad)).ToArray();
+        var pads = footprint.Pads.Select(pad => BuildPad(component, pose, pad, netByPad, layerMirror)).ToArray();
         return new ComponentGeometry(component, pose, body, courtyard, pads);
     }
 
-    private PadGeometry BuildPad(Component component, ComponentPose pose, Pad pad)
+    private PadGeometry BuildPad(Component component, ComponentPose pose, Pad pad, IReadOnlyDictionary<(string ComponentId, string PadId), NetId> netByPad, IReadOnlyDictionary<LayerId, LayerId> layerMirror)
     {
         var localPad = pad.CustomPolygon is not null
             ? GeometryPolygon.From(pad.CustomPolygon)
@@ -145,8 +148,12 @@ public sealed class PhysicalGeometryBuilder
         var componentTransform = new GeometryTransform(GeometryPoint.From(pose.Position), pose.Rotation, pose.Side);
         var inFootprint = _kernel.TransformPolygon(localPad, padTransform);
         var absolute = _kernel.TransformPolygon(inFootprint, componentTransform);
+        netByPad.TryGetValue((component.Id.Value, pad.Id.Value), out var netId);
         var objects = pad.LayerIds.Select(layerId =>
-            new PhysicalObject($"{component.Id.Value}:pad:{pad.Id.Value}:{layerId.Value}", "PAD", pad.Id.Value, PhysicalObjectKind.Pad, absolute, layerId, null)).ToArray();
+        {
+            var physicalLayer = MirrorLayer(layerId, pose.Side, layerMirror);
+            return new PhysicalObject($"{component.Id.Value}:pad:{pad.Id.Value}:{physicalLayer.Value}", "PAD", pad.Id.Value, PhysicalObjectKind.Pad, absolute, physicalLayer, netId);
+        }).ToArray();
         return new PadGeometry(pad, objects);
     }
 
@@ -154,21 +161,42 @@ public sealed class PhysicalGeometryBuilder
     {
         var halfX = Math.Max(1, (pad.SizeX?.Value ?? 1) / 2);
         var halfY = Math.Max(1, (pad.SizeY?.Value ?? 1) / 2);
-        return new GeometryPolygon(
-            [
-                new GeometryPoint(-halfX, -halfY),
-                new GeometryPoint(halfX, -halfY),
-                new GeometryPoint(halfX, halfY),
-                new GeometryPoint(-halfX, halfY)
-            ],
-            []);
+        return Canon(pad.Shape) switch
+        {
+            "CIRCLE" => Ellipse(halfX, halfX),
+            "OVAL" => Capsule(new GeometryPoint(-Math.Max(0, halfX - halfY), 0), new GeometryPoint(Math.Max(0, halfX - halfY), 0), halfY),
+            "ROUNDRECT" => RoundedRect(halfX, halfY, Math.Max(1, Math.Min(halfX, halfY) / 4)),
+            "POLYGON" or "CUSTOM" when pad.CustomPolygon is not null => GeometryPolygon.From(pad.CustomPolygon),
+            _ => Rect(-halfX, -halfY, halfX, halfY)
+        };
     }
 
     private static IEnumerable<PhysicalObject> BuildBoard(CanonicalProject project)
     {
         if (project.Board.Outline is not null)
         {
-            yield return new PhysicalObject("board:outline", "BOARD", "BOARD", PhysicalObjectKind.Board, GeometryPolygon.From(project.Board.Outline), null, null);
+            var holes = project.Board.Outline.Holes.Concat(project.Board.Cutouts.Select(c => c.Outer)).ToArray();
+            yield return new PhysicalObject("board:outline", "BOARD", "BOARD", PhysicalObjectKind.Board, new GeometryPolygon(project.Board.Outline.Outer.Select(GeometryPoint.From).ToArray(), holes.Select(h => (IReadOnlyList<GeometryPoint>)h.Select(GeometryPoint.From).ToArray()).ToArray()), null, null);
+        }
+    }
+
+    private static IEnumerable<PhysicalObject> BuildKeepouts(CanonicalProject project)
+    {
+        foreach (var keepout in project.Board.Keepouts)
+        {
+            var appliesTo = keepout.AppliesTo.Count == 0
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ALL" }
+                : keepout.AppliesTo.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (keepout.LayerIds.Count == 0)
+            {
+                yield return new PhysicalObject(keepout.Id.Value, "KEEPOUT", keepout.Id.Value, PhysicalObjectKind.Keepout, GeometryPolygon.From(keepout.Geometry), null, null, appliesTo);
+                continue;
+            }
+
+            foreach (var layerId in keepout.LayerIds)
+            {
+                yield return new PhysicalObject($"{keepout.Id.Value}:{layerId.Value}", "KEEPOUT", keepout.Id.Value, PhysicalObjectKind.Keepout, GeometryPolygon.From(keepout.Geometry), layerId, null, appliesTo);
+            }
         }
     }
 
@@ -193,22 +221,12 @@ public sealed class PhysicalGeometryBuilder
     private static GeometryPolygon TrackPolygon(TrackSegment track)
     {
         var half = Math.Max(1, track.Width.Value / 2);
-        if (track.Start.Y.Value == track.End.Y.Value)
+        if (Canon(track.GeometryKind) == "ARC" && track.ArcCenter is not null)
         {
-            var minX = Math.Min(track.Start.X.Value, track.End.X.Value);
-            var maxX = Math.Max(track.Start.X.Value, track.End.X.Value);
-            return Rect(minX, track.Start.Y.Value - half, maxX, track.Start.Y.Value + half);
+            return ArcStrokePolygon(track, half);
         }
 
-        if (track.Start.X.Value == track.End.X.Value)
-        {
-            var minY = Math.Min(track.Start.Y.Value, track.End.Y.Value);
-            var maxY = Math.Max(track.Start.Y.Value, track.End.Y.Value);
-            return Rect(track.Start.X.Value - half, minY, track.Start.X.Value + half, maxY);
-        }
-
-        var envelope = GeometryEnvelope.FromPoints([GeometryPoint.From(track.Start), GeometryPoint.From(track.End)]).Inflate(half);
-        return Rect(envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY);
+        return Capsule(GeometryPoint.From(track.Start), GeometryPoint.From(track.End), half);
     }
 
     private static IEnumerable<PhysicalObject> BuildVias(CanonicalProject project)
@@ -216,7 +234,7 @@ public sealed class PhysicalGeometryBuilder
         foreach (var via in project.PhysicalDesignState.Vias)
         {
             var radius = Math.Max(1, via.OuterDiameter.Value / 2);
-            yield return new PhysicalObject(via.Id.Value, "VIA", via.Id.Value, PhysicalObjectKind.Via, Rect(via.Position.X.Value - radius, via.Position.Y.Value - radius, via.Position.X.Value + radius, via.Position.Y.Value + radius), null, via.NetId);
+            yield return new PhysicalObject(via.Id.Value, "VIA", via.Id.Value, PhysicalObjectKind.Via, Circle(GeometryPoint.From(via.Position), radius), null, via.NetId);
         }
     }
 
@@ -241,4 +259,153 @@ public sealed class PhysicalGeometryBuilder
                 new GeometryPoint(minX, maxY)
             ],
             []);
+
+    private static GeometryPolygon Ellipse(long radiusX, long radiusY, int segments = 32)
+    {
+        var points = Enumerable.Range(0, segments)
+            .Select(i =>
+            {
+                var angle = 2d * Math.PI * i / segments;
+                return new GeometryPoint((long)Math.Round(Math.Cos(angle) * radiusX), (long)Math.Round(Math.Sin(angle) * radiusY));
+            })
+            .ToArray();
+        return new GeometryPolygon(points, []);
+    }
+
+    private static GeometryPolygon Circle(GeometryPoint center, long radius, int segments = 32)
+    {
+        var local = Ellipse(radius, radius, segments);
+        return new GeometryPolygon(local.Outer.Select(p => new GeometryPoint(p.X + center.X, p.Y + center.Y)).ToArray(), []);
+    }
+
+    private static GeometryPolygon Capsule(GeometryPoint start, GeometryPoint end, long radius, int capSegments = 12)
+    {
+        var dx = end.X - start.X;
+        var dy = end.Y - start.Y;
+        var length = Math.Sqrt((double)dx * dx + (double)dy * dy);
+        if (length == 0)
+        {
+            return Circle(start, radius);
+        }
+
+        var nx = -dy / length;
+        var ny = dx / length;
+        var startAngle = Math.Atan2(-ny, -nx);
+        var endAngle = Math.Atan2(ny, nx);
+        var points = new List<GeometryPoint>();
+        points.AddRange(ArcPoints(end, endAngle, endAngle + Math.PI, radius, capSegments));
+        points.AddRange(ArcPoints(start, startAngle, startAngle + Math.PI, radius, capSegments));
+        return new GeometryPolygon(points, []);
+    }
+
+    private static GeometryPolygon RoundedRect(long halfX, long halfY, long radius, int cornerSegments = 4)
+    {
+        radius = Math.Min(radius, Math.Min(halfX, halfY));
+        var points = new List<GeometryPoint>();
+        points.AddRange(ArcPoints(new GeometryPoint(halfX - radius, halfY - radius), 0, Math.PI / 2, radius, cornerSegments));
+        points.AddRange(ArcPoints(new GeometryPoint(-halfX + radius, halfY - radius), Math.PI / 2, Math.PI, radius, cornerSegments));
+        points.AddRange(ArcPoints(new GeometryPoint(-halfX + radius, -halfY + radius), Math.PI, Math.PI * 1.5, radius, cornerSegments));
+        points.AddRange(ArcPoints(new GeometryPoint(halfX - radius, -halfY + radius), Math.PI * 1.5, Math.PI * 2, radius, cornerSegments));
+        return new GeometryPolygon(points, []);
+    }
+
+    private static GeometryPolygon ArcStrokePolygon(TrackSegment track, long halfWidth)
+    {
+        var center = GeometryPoint.From(track.ArcCenter!.Value);
+        var start = GeometryPoint.From(track.Start);
+        var end = GeometryPoint.From(track.End);
+        var radius = Math.Sqrt(Math.Pow(start.X - center.X, 2) + Math.Pow(start.Y - center.Y, 2));
+        var startAngle = Math.Atan2(start.Y - center.Y, start.X - center.X);
+        var endAngle = Math.Atan2(end.Y - center.Y, end.X - center.X);
+        var clockwise = track.Clockwise ?? false;
+        var sweep = Sweep(startAngle, endAngle, clockwise);
+        var steps = Math.Max(8, (int)Math.Ceiling(Math.Abs(sweep) / (Math.PI / 18)));
+        var outer = radius + halfWidth;
+        var inner = Math.Max(1, radius - halfWidth);
+        var points = new List<GeometryPoint>();
+        for (var i = 0; i <= steps; i++)
+        {
+            var angle = startAngle + sweep * i / steps;
+            points.Add(new GeometryPoint(center.X + (long)Math.Round(Math.Cos(angle) * outer), center.Y + (long)Math.Round(Math.Sin(angle) * outer)));
+        }
+
+        for (var i = steps; i >= 0; i--)
+        {
+            var angle = startAngle + sweep * i / steps;
+            points.Add(new GeometryPoint(center.X + (long)Math.Round(Math.Cos(angle) * inner), center.Y + (long)Math.Round(Math.Sin(angle) * inner)));
+        }
+
+        return new GeometryPolygon(points, []);
+    }
+
+    private static IEnumerable<GeometryPoint> ArcPoints(GeometryPoint center, double from, double to, long radius, int steps)
+    {
+        for (var i = 0; i <= steps; i++)
+        {
+            var angle = from + (to - from) * i / steps;
+            yield return new GeometryPoint(center.X + (long)Math.Round(Math.Cos(angle) * radius), center.Y + (long)Math.Round(Math.Sin(angle) * radius));
+        }
+    }
+
+    private static double Sweep(double start, double end, bool clockwise)
+    {
+        var sweep = end - start;
+        if (clockwise && sweep > 0)
+        {
+            sweep -= Math.PI * 2;
+        }
+        else if (!clockwise && sweep < 0)
+        {
+            sweep += Math.PI * 2;
+        }
+
+        return sweep;
+    }
+
+    private static IReadOnlyDictionary<(string ComponentId, string PadId), NetId> NetByPad(CanonicalProject project) =>
+        project.LogicalDesign.Nets
+            .SelectMany(net => net.Endpoints.Where(e => e.PadId is not null).Select(e => (e.ComponentId.Value, e.PadId!.Value.Value, net.Id)))
+            .ToDictionary(e => (e.Item1, e.Item2), e => e.Id);
+
+    private static IReadOnlyDictionary<LayerId, LayerId> LayerMirror(IReadOnlyList<BoardLayer> layers)
+    {
+        var map = new Dictionary<LayerId, LayerId>();
+        PairByName("top", "bottom");
+        PairByOrder(layers.Where(l => l.IsCopperCapable).OrderBy(l => l.Order).ToArray());
+        return map;
+
+        void PairByName(string top, string bottom)
+        {
+            var topLayers = layers.Where(l => l.Name.Contains(top, StringComparison.OrdinalIgnoreCase) || l.Id.Value.Contains(top, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var bottomLayers = layers.Where(l => l.Name.Contains(bottom, StringComparison.OrdinalIgnoreCase) || l.Id.Value.Contains(bottom, StringComparison.OrdinalIgnoreCase)).ToArray();
+            foreach (var t in topLayers)
+            {
+                var suffix = t.Id.Value.Replace(top, string.Empty, StringComparison.OrdinalIgnoreCase).Replace("TOP", string.Empty, StringComparison.OrdinalIgnoreCase);
+                var match = bottomLayers.FirstOrDefault(b => b.Id.Value.Replace(bottom, string.Empty, StringComparison.OrdinalIgnoreCase).Replace("BOTTOM", string.Empty, StringComparison.OrdinalIgnoreCase).Equals(suffix, StringComparison.OrdinalIgnoreCase))
+                    ?? bottomLayers.FirstOrDefault(b => string.Equals(b.LayerType, t.LayerType, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    map[t.Id] = match.Id;
+                    map[match.Id] = t.Id;
+                }
+            }
+        }
+
+        void PairByOrder(IReadOnlyList<BoardLayer> ordered)
+        {
+            if (ordered.Count >= 2)
+            {
+                map.TryAdd(ordered[0].Id, ordered[^1].Id);
+                map.TryAdd(ordered[^1].Id, ordered[0].Id);
+            }
+        }
+    }
+
+    private static LayerId MirrorLayer(LayerId layerId, string side, IReadOnlyDictionary<LayerId, LayerId> layerMirror) =>
+        string.Equals(side, "BOTTOM", StringComparison.OrdinalIgnoreCase) && layerMirror.TryGetValue(layerId, out var mirrored)
+            ? mirrored
+            : layerId;
+
+    private static string Canon(string value) =>
+        value.Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
 }

@@ -4,78 +4,118 @@ using PlaceRouter.Domain.Model;
 
 namespace PlaceRouter.Geometry;
 
-public sealed record ManufacturingRules(
-    LengthUnits MinimumTrackWidth,
-    LengthUnits MinimumClearance,
-    LengthUnits MinimumDrill,
-    LengthUnits MinimumViaDiameter,
-    LengthUnits AnnularRing,
-    LengthUnits CopperToEdge,
-    LengthUnits MinimumComponentSpacing,
-    IReadOnlySet<string> AllowedViaTypes,
-    Provenance Provenance)
+public sealed record ManufacturingLengthRule(
+    string Name,
+    LengthUnits? Value,
+    string Status,
+    Provenance Provenance,
+    IReadOnlyList<string> SourceKeys)
 {
-    public static ManufacturingRules ConservativeDefault(Provenance provenance) =>
-        new(
-            new LengthUnits(150),
-            new LengthUnits(150),
-            new LengthUnits(300),
-            new LengthUnits(600),
-            new LengthUnits(150),
-            new LengthUnits(250),
-            new LengthUnits(150),
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "THROUGH" },
-            provenance);
+    public bool HasKnownValue =>
+        Value is not null &&
+        !string.Equals(Status, "UNKNOWN", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(Status, "NOT_APPLICABLE", StringComparison.OrdinalIgnoreCase);
 }
+
+public sealed record ManufacturingSetRule(
+    string Name,
+    IReadOnlySet<string>? Values,
+    string Status,
+    Provenance Provenance,
+    IReadOnlyList<string> SourceKeys)
+{
+    public bool HasKnownValue =>
+        Values is not null &&
+        !string.Equals(Status, "UNKNOWN", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(Status, "NOT_APPLICABLE", StringComparison.OrdinalIgnoreCase);
+}
+
+public sealed record ManufacturingRules(
+    ManufacturingLengthRule MinimumTrackWidth,
+    ManufacturingLengthRule MinimumClearance,
+    ManufacturingLengthRule MinimumDrill,
+    ManufacturingLengthRule MinimumViaDiameter,
+    ManufacturingLengthRule AnnularRing,
+    ManufacturingLengthRule CopperToEdge,
+    ManufacturingLengthRule MinimumComponentSpacing,
+    ManufacturingSetRule AllowedViaTypes,
+    ManufacturingSetRule AllowedLayerCounts,
+    Provenance Provenance);
 
 public static class ManufacturingRuleResolver
 {
-    public static ManufacturingRules Resolve(ManufacturingProfile profile)
-    {
-        var defaults = ManufacturingRules.ConservativeDefault(profile.Provenance);
-        return defaults with
-        {
-            MinimumTrackWidth = Length(profile, "minimumTrackWidth") ?? defaults.MinimumTrackWidth,
-            MinimumClearance = Length(profile, "minimumSpacing", "minimumClearance") ?? defaults.MinimumClearance,
-            MinimumDrill = Length(profile, "minimumDrill") ?? defaults.MinimumDrill,
-            MinimumViaDiameter = Length(profile, "minimumViaDiameter") ?? defaults.MinimumViaDiameter,
-            AnnularRing = Length(profile, "minimumAnnularRing", "annularRing") ?? defaults.AnnularRing,
-            CopperToEdge = Length(profile, "copperToEdge", "minimumCopperToEdge") ?? defaults.CopperToEdge,
-            MinimumComponentSpacing = Length(profile, "minimumComponentSpacing", "minimumCourtyardSpacing") ?? defaults.MinimumComponentSpacing,
-            AllowedViaTypes = StringSet(profile, "allowedViaTypes") ?? defaults.AllowedViaTypes,
-            Provenance = profile.Provenance
-        };
-    }
+    public static ManufacturingRules Resolve(ManufacturingProfile profile) =>
+        new(
+            Length(profile, "MinimumTrackWidth", "minimumTrackWidth", "minimumTraceWidth", "minimumWidth"),
+            Length(profile, "MinimumClearance", "minimumSpacing", "minimumClearance"),
+            Length(profile, "MinimumDrill", "minimumDrill"),
+            Length(profile, "MinimumViaDiameter", "minimumViaDiameter"),
+            Length(profile, "AnnularRing", "minimumAnnularRing", "annularRing"),
+            Length(profile, "CopperToEdge", "copperToEdge", "minimumCopperToEdge"),
+            Length(profile, "MinimumComponentSpacing", "minimumComponentSpacing", "minimumCourtyardSpacing"),
+            StringSet(profile, "AllowedViaTypes", "allowedViaTypes"),
+            StringSet(profile, "AllowedLayerCounts", "allowedLayerCounts", "allowedCopperLayerCounts"),
+            profile.Provenance);
 
-    private static LengthUnits? Length(ManufacturingProfile profile, params string[] keys)
+    private static ManufacturingLengthRule Length(ManufacturingProfile profile, string name, params string[] keys)
     {
         foreach (var key in keys)
         {
-            if (profile.Capabilities.TryGetValue(key, out var value) && IsUsable(value) && TryReadLong(value.Value, out var units))
+            if (profile.Capabilities.TryGetValue(key, out var value) && TryReadLong(value.Value, out var units))
             {
-                return new LengthUnits(units);
+                return new ManufacturingLengthRule(name, new LengthUnits(units), NormalizeStatus(value.Status), value.Provenance, [key]);
             }
         }
 
-        return null;
+        return new ManufacturingLengthRule(name, null, "UNKNOWN", profile.Provenance, keys);
     }
 
-    private static IReadOnlySet<string>? StringSet(ManufacturingProfile profile, string key)
+    private static ManufacturingSetRule StringSet(ManufacturingProfile profile, string name, params string[] keys)
     {
-        if (!profile.Capabilities.TryGetValue(key, out var value) || !IsUsable(value) || value.Value.ValueKind != JsonValueKind.Array)
+        foreach (var key in keys)
         {
-            return null;
+            if (!profile.Capabilities.TryGetValue(key, out var value))
+            {
+                continue;
+            }
+
+            var set = ReadStringSet(value.Value);
+            if (set is not null)
+            {
+                return new ManufacturingSetRule(name, set, NormalizeStatus(value.Status), value.Provenance, [key]);
+            }
         }
 
-        return value.Value.EnumerateArray()
-            .Where(v => v.ValueKind == JsonValueKind.String)
-            .Select(v => v.GetString()!)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new ManufacturingSetRule(name, null, "UNKNOWN", profile.Provenance, keys);
     }
 
-    private static bool IsUsable(SourcedValue value) =>
-        !string.Equals(value.Status, "UNKNOWN", StringComparison.OrdinalIgnoreCase) &&
-        !string.Equals(value.Status, "NOT_APPLICABLE", StringComparison.OrdinalIgnoreCase);
+    private static IReadOnlySet<string>? ReadStringSet(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            return element.EnumerateArray()
+                .Select(ReadString)
+                .OfType<string>()
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var scalar = ReadString(element);
+        return string.IsNullOrWhiteSpace(scalar)
+            ? null
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase) { scalar };
+    }
+
+    private static string? ReadString(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.GetRawText(),
+            _ => null
+        };
+
+    private static string NormalizeStatus(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "UNKNOWN" : value.ToUpperInvariant();
 
     private static bool TryReadLong(JsonElement element, out long value)
     {
