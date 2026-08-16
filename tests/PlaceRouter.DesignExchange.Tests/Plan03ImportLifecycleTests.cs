@@ -43,6 +43,41 @@ public sealed class Plan03ImportLifecycleTests
     }
 
     [Fact]
+    public void Dsn_import_maps_specctra_library_image_padstack_and_places()
+    {
+        using var temp = new TempDirectory();
+        var source = Path.Combine(temp.Path, "specctra-baseline.dsn");
+        File.Copy(FixturePath("specctra-baseline.dsn"), source);
+        var service = Service();
+
+        var result = service.ImportDesign(new ImportRequest(source, SourceRetentionPolicy.ReferenceOnly));
+
+        Assert.True(result.Success, Messages(result.Diagnostics));
+        Assert.Equal("COMPLETE", result.Capabilities["components"]);
+        Assert.Equal("COMPLETE", result.Capabilities["footprints"]);
+        Assert.Equal("COMPLETE", result.Capabilities["componentPlacement"]);
+        Assert.Equal("COMPLETE", result.Capabilities["pads"]);
+
+        var project = result.Project!;
+        Assert.Equal("SpecctraBaseline", project.Metadata.Name);
+        Assert.Equal(2, project.LogicalDesign.Components.Count);
+        Assert.Single(project.LogicalDesign.Footprints);
+        Assert.Equal(2, project.LogicalDesign.Footprints.Single().Pads.Count);
+        Assert.All(project.LogicalDesign.Components, c => Assert.Equal("fp_r_0603", c.FootprintId!.Value.Value));
+        Assert.Equal(new Point2(new(1000), new(1000)), Pose(project, "cmp_u1").Position);
+        Assert.Equal(new AngleDegrees(180), Pose(project, "cmp_u2").Rotation);
+        Assert.Equal(2, project.LogicalDesign.Nets.Count);
+        Assert.All(project.LogicalDesign.Nets.SelectMany(n => n.Endpoints), e => Assert.NotNull(e.PadId));
+
+        var prdx = Path.Combine(temp.Path, "specctra.prdx");
+        var save = service.SaveProject(result.Document!, prdx);
+        Assert.True(save.Success, Messages(save.Diagnostics));
+        var reopened = service.LoadProject(prdx);
+        Assert.True(reopened.Success, Messages(reopened.Diagnostics));
+        Assert.Equal(project.Summary, reopened.Project!.Summary);
+    }
+
+    [Fact]
     public void Dsn_import_reports_missing_physical_data_without_inventing_defaults()
     {
         using var temp = new TempDirectory();
@@ -455,6 +490,23 @@ public sealed class Plan03ImportLifecycleTests
         var path = Path.Combine(directory, "sample-plan03.dsn");
         File.WriteAllText(path, SampleDsn, Encoding.UTF8);
         return path;
+    }
+
+    private static string FixturePath(string name)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "tests", "PlaceRouter.DesignExchange.Tests", "Fixtures", name);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Unable to locate fixture '{name}'.", name);
     }
 
     private static string SourceHash(string source) =>

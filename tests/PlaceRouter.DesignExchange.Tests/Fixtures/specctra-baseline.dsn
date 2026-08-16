@@ -1,0 +1,28 @@
+(pcb SpecctraBaseline
+  (resolution um 1)
+  (structure
+    (layer Top signal)
+    (layer Bottom signal)
+    (boundary (path pcb 0 0 10000 0 10000 6000 0 6000))
+  )
+  (library
+    (padstack SMD_RECT_0603
+      (shape (rect Top -300 -400 300 400))
+    )
+    (image R_0603
+      (pin SMD_RECT_0603 1 -600 0 0)
+      (pin SMD_RECT_0603 2 600 0 0)
+    )
+  )
+  (placement
+    (component R_0603
+      (place U1 1000 1000 front 0)
+      (place U2 5000 1000 front 180)
+    )
+  )
+  (network
+    (net N1 (pins U1-1 U2-1))
+    (net GND (pins U1-2 U2-2))
+  )
+  (rules (width 150) (clearance 150) (drill 300) (via 600))
+)

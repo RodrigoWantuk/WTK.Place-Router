@@ -100,92 +100,29 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         var poses = new List<ComponentPose>();
         var footprints = new Dictionary<string, Footprint>(StringComparer.Ordinal);
         var componentPadIds = new Dictionary<string, Dictionary<string, PadId>>(StringComparer.OrdinalIgnoreCase);
+        var libraryImages = ReadLibraryImages(root, layerByName, units, sourceImportId, losses);
 
         foreach (var componentNode in root.Descendants("component"))
         {
-            var reference = componentNode.AtomAt(1) ?? throw new InvalidDataException("Component without reference designator.");
-            var footprintName = componentNode.Child("footprint")?.AtomAt(1);
-            FootprintId? footprintId = string.IsNullOrWhiteSpace(footprintName)
-                ? null
-                : new FootprintId("fp_" + StableToken(footprintName));
-            var componentId = new ComponentId("cmp_" + StableToken(reference));
-            var pads = footprintId is null
-                ? []
-                : ReadPads(componentNode, footprintId.Value, layerByName, units, losses).ToArray();
-            if (footprintId is not null && !footprints.ContainsKey(footprintId.Value.Value))
-            {
-                footprints[footprintId.Value.Value] = new Footprint(
-                    footprintId.Value,
-                    footprintName!,
-                    ZeroPoint(),
-                    null,
-                    BodyFromPads(pads),
-                    null,
-                    pads,
-                    [],
-                    [],
-                    ImportedProvenance(sourceImportId));
-            }
-            else if (footprintId is null)
-            {
-                AddLoss(losses, "footprints", $"Component '{reference}' did not provide a footprint; footprintId remains Unknown.", DiagnosticSeverity.Warning);
-            }
+            ImportComponentNode(
+                componentNode,
+                libraryImages,
+                layerByName,
+                units,
+                sourceImportId,
+                components,
+                poses,
+                footprints,
+                componentPadIds,
+                losses);
+        }
 
-            componentPadIds[reference] = pads.ToDictionary(p => p.Number, p => p.Id, StringComparer.OrdinalIgnoreCase);
-            components.Add(new Component(
-                componentId,
-                reference,
-                null,
-                null,
-                null,
-                footprintId,
-                "MOVABLE",
-                new Dictionary<string, SourcedValue>(StringComparer.Ordinal),
-                SourcedValue.Unknown(),
-                JsonObject(("sourceRef", reference)),
-                ImportedProvenance(sourceImportId)));
-
-            var place = componentNode.Child("place");
-            if (place is null)
+        foreach (var image in libraryImages.Values)
+        {
+            if (!footprints.ContainsKey(image.Footprint.Id.Value))
             {
-                AddLoss(losses, "componentPlacement", $"Component '{reference}' did not provide placement; no ComponentPose was created.", DiagnosticSeverity.Warning);
-                continue;
+                footprints[image.Footprint.Id.Value] = image.Footprint;
             }
-
-            if (!TryRequiredUnit(place, 1, units, $"Component '{reference}' placement X is missing; no ComponentPose was created.", losses, "componentPlacement", out var x) ||
-                !TryRequiredUnit(place, 2, units, $"Component '{reference}' placement Y is missing; no ComponentPose was created.", losses, "componentPlacement", out var y))
-            {
-                continue;
-            }
-
-            var sideAtom = place.AtomAt(3);
-            if (sideAtom is null)
-            {
-                AddLoss(losses, "componentPlacement", $"Component '{reference}' placement side is missing; no ComponentPose was created.", DiagnosticSeverity.Warning);
-                continue;
-            }
-
-            var rotationAtom = place.AtomAt(4);
-            if (rotationAtom is null)
-            {
-                AddLoss(losses, "componentPlacement", $"Component '{reference}' placement rotation is missing; no ComponentPose was created.", DiagnosticSeverity.Warning);
-                continue;
-            }
-
-            var side = sideAtom.ToLowerInvariant() switch
-            {
-                "front" or "top" => "TOP",
-                "back" or "bottom" => "BOTTOM",
-                _ => null
-            };
-            if (side is null)
-            {
-                AddLoss(losses, "componentPlacement", $"Component '{reference}' placement side '{sideAtom}' is unsupported; no ComponentPose was created.", DiagnosticSeverity.Warning);
-                continue;
-            }
-
-            var rotation = decimal.Parse(rotationAtom, System.Globalization.CultureInfo.InvariantCulture);
-            poses.Add(new ComponentPose(componentId, new Point2(x, y), new AngleDegrees(rotation), side, "PLACED", AdapterId));
         }
 
         var nets = ReadNets(root, componentPadIds).ToArray();
@@ -248,18 +185,205 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             JsonDefaults.EmptyObject);
     }
 
+    private void ImportComponentNode(
+        SExpression componentNode,
+        IReadOnlyDictionary<string, LibraryImage> libraryImages,
+        IReadOnlyDictionary<string, LayerId> layerByName,
+        UnitScale units,
+        SourceImportId sourceImportId,
+        List<Component> components,
+        List<ComponentPose> poses,
+        Dictionary<string, Footprint> footprints,
+        Dictionary<string, Dictionary<string, PadId>> componentPadIds,
+        List<Diagnostic> losses)
+    {
+        var firstAtom = componentNode.AtomAt(1) ?? throw new InvalidDataException("Component without identifier.");
+        var placeChildren = componentNode.Children.Where(c => c.IsList("place")).ToArray();
+        if (placeChildren.Length > 0 && componentNode.Child("footprint") is null && libraryImages.Count > 0)
+        {
+            ImportSpecctraPlacementComponent(componentNode, firstAtom, placeChildren, libraryImages, components, poses, footprints, componentPadIds, losses);
+            return;
+        }
+
+        ImportInlineComponent(componentNode, firstAtom, layerByName, units, sourceImportId, components, poses, footprints, componentPadIds, losses);
+    }
+
+    private void ImportInlineComponent(
+        SExpression componentNode,
+        string reference,
+        IReadOnlyDictionary<string, LayerId> layerByName,
+        UnitScale units,
+        SourceImportId sourceImportId,
+        List<Component> components,
+        List<ComponentPose> poses,
+        Dictionary<string, Footprint> footprints,
+        Dictionary<string, Dictionary<string, PadId>> componentPadIds,
+        List<Diagnostic> losses)
+    {
+        var footprintName = componentNode.Child("footprint")?.AtomAt(1);
+        FootprintId? footprintId = string.IsNullOrWhiteSpace(footprintName)
+            ? null
+            : new FootprintId("fp_" + StableToken(footprintName));
+        var componentId = new ComponentId("cmp_" + StableToken(reference));
+        var pads = footprintId is null
+            ? []
+            : ReadInlinePads(componentNode, footprintId.Value, layerByName, units, losses).ToArray();
+        if (footprintId is not null && !footprints.ContainsKey(footprintId.Value.Value))
+        {
+            footprints[footprintId.Value.Value] = new Footprint(
+                footprintId.Value,
+                footprintName!,
+                ZeroPoint(),
+                null,
+                BodyFromPads(pads),
+                null,
+                pads,
+                [],
+                [],
+                ImportedProvenance(sourceImportId));
+        }
+        else if (footprintId is null)
+        {
+            AddLoss(losses, "footprints", $"Component '{reference}' did not provide a footprint; footprintId remains Unknown.", DiagnosticSeverity.Warning);
+        }
+
+        componentPadIds[reference] = pads.ToDictionary(p => p.Number, p => p.Id, StringComparer.OrdinalIgnoreCase);
+        AddComponent(components, componentId, reference, footprintId, sourceImportId);
+
+        var place = componentNode.Child("place");
+        if (place is null)
+        {
+            AddLoss(losses, "componentPlacement", $"Component '{reference}' did not provide placement; no ComponentPose was created.", DiagnosticSeverity.Warning);
+            return;
+        }
+
+        AddPose(reference, componentId, place, 1, units, poses, losses);
+    }
+
+    private void ImportSpecctraPlacementComponent(
+        SExpression componentNode,
+        string imageName,
+        IReadOnlyList<SExpression> places,
+        IReadOnlyDictionary<string, LibraryImage> libraryImages,
+        List<Component> components,
+        List<ComponentPose> poses,
+        Dictionary<string, Footprint> footprints,
+        Dictionary<string, Dictionary<string, PadId>> componentPadIds,
+        List<Diagnostic> losses)
+    {
+        if (!libraryImages.TryGetValue(imageName, out var image))
+        {
+            AddLoss(losses, "footprints", $"Placement component references image '{imageName}', but no matching library image was found.", DiagnosticSeverity.Warning);
+            return;
+        }
+
+        footprints.TryAdd(image.Footprint.Id.Value, image.Footprint);
+        foreach (var place in places)
+        {
+            var reference = place.AtomAt(1);
+            if (string.IsNullOrWhiteSpace(reference))
+            {
+                AddLoss(losses, "components", $"Placement for image '{imageName}' did not provide a component reference.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var componentId = new ComponentId("cmp_" + StableToken(reference));
+            componentPadIds[reference] = image.PadIdsByPinName.ToDictionary(k => k.Key, v => v.Value, StringComparer.OrdinalIgnoreCase);
+            AddComponent(components, componentId, reference, image.Footprint.Id, image.SourceImportId);
+            AddPose(reference, componentId, place, 2, image.Units, poses, losses);
+        }
+    }
+
+    private void AddPose(string reference, ComponentId componentId, SExpression place, int coordinateStart, UnitScale units, List<ComponentPose> poses, List<Diagnostic> losses)
+    {
+        if (!TryRequiredUnit(place, coordinateStart, units, $"Component '{reference}' placement X is missing; no ComponentPose was created.", losses, "componentPlacement", out var x) ||
+            !TryRequiredUnit(place, coordinateStart + 1, units, $"Component '{reference}' placement Y is missing; no ComponentPose was created.", losses, "componentPlacement", out var y))
+        {
+            return;
+        }
+
+        var sideAtom = place.AtomAt(coordinateStart + 2);
+        if (sideAtom is null)
+        {
+            AddLoss(losses, "componentPlacement", $"Component '{reference}' placement side is missing; no ComponentPose was created.", DiagnosticSeverity.Warning);
+            return;
+        }
+
+        var rotationAtom = place.AtomAt(coordinateStart + 3);
+        if (rotationAtom is null)
+        {
+            AddLoss(losses, "componentPlacement", $"Component '{reference}' placement rotation is missing; no ComponentPose was created.", DiagnosticSeverity.Warning);
+            return;
+        }
+
+        var side = sideAtom.ToLowerInvariant() switch
+        {
+            "front" or "top" => "TOP",
+            "back" or "bottom" => "BOTTOM",
+            _ => null
+        };
+        if (side is null)
+        {
+            AddLoss(losses, "componentPlacement", $"Component '{reference}' placement side '{sideAtom}' is unsupported; no ComponentPose was created.", DiagnosticSeverity.Warning);
+            return;
+        }
+
+        var rotation = decimal.Parse(rotationAtom, System.Globalization.CultureInfo.InvariantCulture);
+        poses.Add(new ComponentPose(componentId, new Point2(x, y), new AngleDegrees(rotation), side, "PLACED", AdapterId));
+    }
+
+    private void AddComponent(List<Component> components, ComponentId componentId, string reference, FootprintId? footprintId, SourceImportId sourceImportId)
+    {
+        if (components.Any(c => c.Id == componentId))
+        {
+            return;
+        }
+
+        components.Add(new Component(
+            componentId,
+            reference,
+            null,
+            null,
+            null,
+            footprintId,
+            "MOVABLE",
+            new Dictionary<string, SourcedValue>(StringComparer.Ordinal),
+            SourcedValue.Unknown(),
+            JsonObject(("sourceRef", reference)),
+            ImportedProvenance(sourceImportId)));
+    }
+
     private static UnitScale ReadUnits(SExpression root)
     {
-        var unit = root.Child("unit")?.AtomAt(1)
-            ?? throw new InvalidDataException("DSN source did not declare '(unit ...)'.");
-        return unit.ToLowerInvariant() switch
+        if (root.Child("unit")?.AtomAt(1) is { } unit)
         {
-            "um" or "micron" or "microns" => new UnitScale(unit, 1m),
-            "mm" => new UnitScale(unit, 1000m),
-            "mil" or "mils" => new UnitScale(unit, 25.4m),
-            "inch" or "in" => new UnitScale(unit, 25_400m),
-            _ => throw new InvalidDataException($"DSN unit '{unit}' is not supported.")
+            return unit.ToLowerInvariant() switch
+            {
+                "um" or "micron" or "microns" => new UnitScale(unit, 1m),
+                "mm" => new UnitScale(unit, 1000m),
+                "mil" or "mils" => new UnitScale(unit, 25.4m),
+                "inch" or "in" => new UnitScale(unit, 25_400m),
+                _ => throw new InvalidDataException($"DSN unit '{unit}' is not supported.")
+            };
+        }
+
+        var resolution = root.Child("resolution") ?? throw new InvalidDataException("DSN source did not declare '(unit ...)' or '(resolution ...)'.");
+        var resolutionUnit = resolution.AtomAt(1) ?? throw new InvalidDataException("DSN resolution did not declare a unit.");
+        var denominator = decimal.Parse(resolution.AtomAt(2) ?? "1", System.Globalization.CultureInfo.InvariantCulture);
+        if (denominator <= 0)
+        {
+            throw new InvalidDataException("DSN resolution denominator must be greater than zero.");
+        }
+
+        var unitMicrometers = resolutionUnit.ToLowerInvariant() switch
+        {
+            "um" or "micron" or "microns" => 1m,
+            "mm" => 1000m,
+            "mil" or "mils" => 25.4m,
+            "inch" or "in" => 25_400m,
+            _ => throw new InvalidDataException($"DSN resolution unit '{resolutionUnit}' is not supported.")
         };
+        return new UnitScale(resolutionUnit, unitMicrometers / denominator);
     }
 
     private static IReadOnlyList<BoardLayer> ReadLayers(SExpression root, List<Diagnostic> losses)
@@ -268,7 +392,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             .Select((node, index) =>
             {
                 var name = node.AtomAt(1) ?? throw new InvalidDataException("Layer without name.");
-                var typeAtom = node.AtomAt(2);
+                var typeAtom = node.AtomAt(2) ?? node.Child("type")?.AtomAt(1);
                 if (typeAtom is null)
                 {
                     AddLoss(losses, "layers", $"Layer '{name}' did not provide a type; layer was not imported.", DiagnosticSeverity.Warning);
@@ -318,7 +442,183 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         return new Polygon2(points, []);
     }
 
-    private static IEnumerable<Pad> ReadPads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName, UnitScale units, List<Diagnostic> losses)
+    private static IReadOnlyDictionary<string, LibraryImage> ReadLibraryImages(
+        SExpression root,
+        IReadOnlyDictionary<string, LayerId> layerByName,
+        UnitScale units,
+        SourceImportId sourceImportId,
+        List<Diagnostic> losses)
+    {
+        var padstacks = ReadPadstacks(root, layerByName, units, losses);
+        var images = new Dictionary<string, LibraryImage>(StringComparer.OrdinalIgnoreCase);
+        foreach (var imageNode in root.Descendants("image"))
+        {
+            var imageName = imageNode.AtomAt(1);
+            if (string.IsNullOrWhiteSpace(imageName))
+            {
+                AddLoss(losses, "footprints", "Library image did not provide a name; image was skipped.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var footprintId = new FootprintId("fp_" + StableToken(imageName));
+            var pads = new List<Pad>();
+            foreach (var pin in imageNode.Children.Where(c => c.IsList("pin")))
+            {
+                var padstackName = pin.AtomAt(1);
+                var pinName = pin.AtomAt(2);
+                if (string.IsNullOrWhiteSpace(padstackName) || string.IsNullOrWhiteSpace(pinName))
+                {
+                    AddLoss(losses, "pads", $"Image '{imageName}' contains a pin without padstack or pin name; pin was skipped.", DiagnosticSeverity.Warning);
+                    continue;
+                }
+
+                if (!padstacks.TryGetValue(padstackName, out var padstack))
+                {
+                    AddLoss(losses, "pads", $"Image '{imageName}' pin '{pinName}' references missing padstack '{padstackName}'; pin was skipped.", DiagnosticSeverity.Warning);
+                    continue;
+                }
+
+                if (!TryRequiredUnit(pin, 3, units, $"Image '{imageName}' pin '{pinName}' position X is missing; pin was skipped.", losses, "pads", out var x) ||
+                    !TryRequiredUnit(pin, 4, units, $"Image '{imageName}' pin '{pinName}' position Y is missing; pin was skipped.", losses, "pads", out var y))
+                {
+                    continue;
+                }
+
+                var rotation = pin.AtomAt(5) is { } rawRotation
+                    ? decimal.Parse(rawRotation, System.Globalization.CultureInfo.InvariantCulture)
+                    : 0m;
+                pads.Add(new Pad(
+                    new PadId("pad_" + StableToken(footprintId.Value + "_" + pinName)),
+                    pinName,
+                    null,
+                    pinName,
+                    new Point2(x, y),
+                    new AngleDegrees(rotation),
+                    padstack.Shape,
+                    padstack.SizeX,
+                    padstack.SizeY,
+                    null,
+                    padstack.PadType,
+                    padstack.LayerIds,
+                    null,
+                    null,
+                    null));
+            }
+
+            var footprint = new Footprint(
+                footprintId,
+                imageName,
+                ZeroPoint(),
+                null,
+                BodyFromPads(pads),
+                null,
+                pads,
+                [],
+                [],
+                ImportedProvenance(sourceImportId));
+            images[imageName] = new LibraryImage(
+                footprint,
+                pads.ToDictionary(p => p.Number, p => p.Id, StringComparer.OrdinalIgnoreCase),
+                units,
+                sourceImportId);
+        }
+
+        return images;
+    }
+
+    private static IReadOnlyDictionary<string, PadstackDefinition> ReadPadstacks(
+        SExpression root,
+        IReadOnlyDictionary<string, LayerId> layerByName,
+        UnitScale units,
+        List<Diagnostic> losses)
+    {
+        var padstacks = new Dictionary<string, PadstackDefinition>(StringComparer.OrdinalIgnoreCase);
+        foreach (var padstack in root.Descendants("padstack"))
+        {
+            var name = padstack.AtomAt(1);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                AddLoss(losses, "pads", "Padstack without name was skipped.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            var shapeNode = padstack.Children.FirstOrDefault(c => c.IsList("shape"));
+            if (shapeNode is null || !TryReadPadstackShape(shapeNode, layerByName, units, losses, out var definition))
+            {
+                AddLoss(losses, "pads", $"Padstack '{name}' does not contain a supported shape; pins using it will be skipped.", DiagnosticSeverity.Warning);
+                continue;
+            }
+
+            padstacks[name] = definition;
+        }
+
+        return padstacks;
+    }
+
+    private static bool TryReadPadstackShape(
+        SExpression shapeNode,
+        IReadOnlyDictionary<string, LayerId> layerByName,
+        UnitScale units,
+        List<Diagnostic> losses,
+        out PadstackDefinition definition)
+    {
+        definition = default!;
+        var primitive = shapeNode.Children.FirstOrDefault();
+        var kind = primitive?.AtomAt(0) ?? shapeNode.AtomAt(1);
+        var layerName = primitive is null ? shapeNode.AtomAt(2) : primitive.AtomAt(1);
+        if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(layerName))
+        {
+            return false;
+        }
+
+        var values = (primitive is null ? shapeNode.Items.Skip(3) : primitive.Items.Skip(2))
+            .Where(i => i.IsAtom)
+            .Select(i => Unit(i.Value, units).Value)
+            .ToArray();
+        var layerIds = LayerIdsForPadstackLayer(layerName, layerByName, losses);
+        if (layerIds.Count == 0)
+        {
+            return false;
+        }
+
+        switch (kind.ToLowerInvariant())
+        {
+            case "rect" when values.Length >= 4:
+                definition = new PadstackDefinition("RECT", new LengthUnits(Math.Abs(values[2] - values[0])), new LengthUnits(Math.Abs(values[3] - values[1])), PadTypeFor(layerName, layerIds), layerIds);
+                return true;
+            case "circle" when values.Length >= 1:
+                definition = new PadstackDefinition("CIRCLE", new LengthUnits(Math.Abs(values[0])), new LengthUnits(Math.Abs(values[0])), PadTypeFor(layerName, layerIds), layerIds);
+                return true;
+            case "oval" when values.Length >= 2:
+                definition = new PadstackDefinition("OVAL", new LengthUnits(Math.Abs(values[0])), new LengthUnits(Math.Abs(values[1])), PadTypeFor(layerName, layerIds), layerIds);
+                return true;
+            default:
+                AddLoss(losses, "pads", $"Padstack shape '{kind}' is not supported.", DiagnosticSeverity.Warning);
+                return false;
+        }
+    }
+
+    private static IReadOnlyList<LayerId> LayerIdsForPadstackLayer(string layerName, IReadOnlyDictionary<string, LayerId> layerByName, List<Diagnostic> losses)
+    {
+        if (layerName.Equals("signal", StringComparison.OrdinalIgnoreCase) ||
+            layerName.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            return layerByName.Values.ToArray();
+        }
+
+        if (layerByName.TryGetValue(layerName, out var layerId))
+        {
+            return [layerId];
+        }
+
+        AddLoss(losses, "layers", $"Padstack references undeclared layer '{layerName}'; shape was skipped.", DiagnosticSeverity.Warning);
+        return [];
+    }
+
+    private static string PadTypeFor(string layerName, IReadOnlyList<LayerId> layerIds) =>
+        layerName.Equals("signal", StringComparison.OrdinalIgnoreCase) || layerIds.Count > 1 ? "THROUGH_HOLE" : "SMD";
+
+    private static IEnumerable<Pad> ReadInlinePads(SExpression componentNode, FootprintId footprintId, IReadOnlyDictionary<string, LayerId> layerByName, UnitScale units, List<Diagnostic> losses)
     {
         foreach (var pad in componentNode.Children.Where(c => c.IsList("pad")))
         {
@@ -431,7 +731,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 var pins = net.Child("pins")?.Items.Skip(1).Where(i => i.IsAtom).Select(i => i.Value) ?? [];
                 var endpoints = pins.Select(pin =>
                 {
-                    var parts = pin.Split('-', 2, StringSplitOptions.TrimEntries);
+                    var parts = SplitPinRef(pin);
                     var reference = parts[0];
                     var number = parts.Length == 2 ? parts[1] : null;
                     componentPadIds.TryGetValue(reference, out var pads);
@@ -449,6 +749,20 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             })
             .OrderBy(n => n.Name, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static string[] SplitPinRef(string pin)
+    {
+        foreach (var separator in new[] { '-', '.', ':' })
+        {
+            var parts = pin.Split(separator, 2, StringSplitOptions.TrimEntries);
+            if (parts.Length == 2)
+            {
+                return parts;
+            }
+        }
+
+        return [pin];
     }
 
     private static IReadOnlyDictionary<string, SourcedValue> ReadRules(SExpression root, UnitScale units)
@@ -579,7 +893,7 @@ public sealed class SpecctraDsnImporter : IDesignImporter
         capabilities["boardOutline"] = outline is null ? "MISSING" : "COMPLETE";
         capabilities["layers"] = layers.Count == 0 ? "MISSING" : "COMPLETE";
         capabilities["components"] = components.Count == 0 ? "MISSING" : "COMPLETE";
-        capabilities["footprints"] = components.Count == 0 ? "NOT_APPLICABLE" : footprints.Count == components.Count ? "COMPLETE" : footprints.Count == 0 ? "MISSING" : "PARTIAL";
+        capabilities["footprints"] = components.Count == 0 ? "NOT_APPLICABLE" : components.All(c => c.FootprintId is not null) ? "COMPLETE" : components.All(c => c.FootprintId is null) ? "MISSING" : "PARTIAL";
         capabilities["componentPlacement"] = components.Count == 0 ? "NOT_APPLICABLE" : poses.Count == components.Count ? "COMPLETE" : poses.Count == 0 ? "MISSING" : "PARTIAL";
         capabilities["pads"] = footprints.Count == 0 ? "MISSING" : footprints.All(f => f.Pads.Count > 0) ? "COMPLETE" : "PARTIAL";
         capabilities["nets"] = nets.Count == 0 ? "MISSING" : "COMPLETE";
@@ -610,6 +924,19 @@ public sealed class SpecctraDsnImporter : IDesignImporter
             Source: "placerouter.specctra-dsn",
             Blocking: false));
     }
+
+    private sealed record LibraryImage(
+        Footprint Footprint,
+        IReadOnlyDictionary<string, PadId> PadIdsByPinName,
+        UnitScale Units,
+        SourceImportId SourceImportId);
+
+    private sealed record PadstackDefinition(
+        string Shape,
+        LengthUnits SizeX,
+        LengthUnits SizeY,
+        string PadType,
+        IReadOnlyList<LayerId> LayerIds);
 
     private sealed class SExpression
     {
@@ -730,6 +1057,17 @@ public sealed class SpecctraDsnImporter : IDesignImporter
                 {
                     Flush();
                     quoted = true;
+                    continue;
+                }
+
+                if (c == ';' || c == '#')
+                {
+                    Flush();
+                    while (i + 1 < source.Length && source[i + 1] is not '\r' and not '\n')
+                    {
+                        i++;
+                    }
+
                     continue;
                 }
 
